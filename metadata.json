@@ -1,0 +1,6 @@
+{
+  "name": "Bangla News Studio Pro",
+  "description": "Professional Bangla broadcast news video editor with HTML/JSON project import, real-time animated canvas timeline, media & voiceover import, motion controls, and MP4 video export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

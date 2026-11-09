@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Bangla News Studio Pro</string>
+    <string name="studio_subtitle">Broadcast Video Editor &amp; Timeline Studio</string>
+    <string name="import_code_file">Import Code File</string>
+    <string name="paste_code_button">Paste HTML / JSON Code</string>
+    <string name="export_mp4">Export to MP4</string>
+    <string name="web_studio_code">Web App HTML</string>
+    <string name="add_shot">Add Shot</string>
+    <string name="import_gallery_photo">Import Photo from Gallery</string>
+    <string name="import_voiceover_audio">Import Voiceover Audio</string>
+</resources>
