@@ -80,6 +80,8 @@ import com.example.model.MotionPreset
 import com.example.model.SoundEffectType
 import com.example.model.StudioBackdropPreset
 import com.example.model.TextAnimationStyle
+import com.example.model.ToonCharacterPose
+import com.example.model.ToonCharacterWho
 import com.example.ui.theme.BroadcastAmber
 import com.example.ui.theme.BroadcastCrimson
 import com.example.ui.theme.BroadcastEmerald
@@ -114,7 +116,11 @@ fun EditorWorkspaceScreen(
     onDismissStatusBanner: () -> Unit,
     onUpdateCategory: (String) -> Unit,
     onUpdateHeadline: (String) -> Unit,
+    onUpdateHighlightWord: (String) -> Unit,
     onUpdateSubheadline: (String) -> Unit,
+    onUpdateStageBannerText: (String) -> Unit,
+    onUpdateToonWho: (ToonCharacterWho) -> Unit,
+    onUpdateToonPose: (ToonCharacterPose) -> Unit,
     onUpdateReporterLocation: (String) -> Unit,
     onUpdateChannelName: (String) -> Unit,
     onUpdateTickerText: (String) -> Unit,
@@ -259,7 +265,7 @@ fun EditorWorkspaceScreen(
                             modifier = Modifier.size(13.dp)
                         )
                         Text(
-                            text = "ভিডিওর যেকোনো লেখার ওপর ক্লিক করে এডিট বা ডিলিট করুন",
+                            text = "ভিডিওর যেকোনো লেখা, ক্যারেক্টার বা দৃশ্যের ওপর ক্লিক করে এডিট করুন",
                             fontSize = 10.sp,
                             color = Color(0xFFE2E8F0)
                         )
@@ -398,7 +404,11 @@ fun EditorWorkspaceScreen(
                     onSelectTab = onSelectInspectorTab,
                     onUpdateCategory = onUpdateCategory,
                     onUpdateHeadline = onUpdateHeadline,
+                    onUpdateHighlightWord = onUpdateHighlightWord,
                     onUpdateSubheadline = onUpdateSubheadline,
+                    onUpdateStageBannerText = onUpdateStageBannerText,
+                    onUpdateToonWho = onUpdateToonWho,
+                    onUpdateToonPose = onUpdateToonPose,
                     onUpdateReporterLocation = onUpdateReporterLocation,
                     onUpdateChannelName = onUpdateChannelName,
                     onUpdateTickerText = onUpdateTickerText,

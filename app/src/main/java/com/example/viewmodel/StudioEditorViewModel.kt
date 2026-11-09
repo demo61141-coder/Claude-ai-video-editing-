@@ -24,6 +24,8 @@ import com.example.model.ShotMediaType
 import com.example.model.SoundEffectType
 import com.example.model.StudioBackdropPreset
 import com.example.model.TextAnimationStyle
+import com.example.model.ToonCharacterPose
+import com.example.model.ToonCharacterWho
 import com.example.model.VideoBitratePreset
 import com.example.model.VideoExportConfig
 import com.example.model.VideoResolutionPreset
@@ -42,15 +44,15 @@ enum class StudioDestination {
 }
 
 enum class InspectorTab(val label: String, val banglaSubtitle: String) {
-    TEXT_SCRIPT("Text & Layers", "টেক্সট এডিট/ডিলিট"),
-    MEDIA_GALLERY("Video & Photo", "ভিডিও/ফটো ও অডিও"),
+    TEXT_SCRIPT("Text & Toon", "টেক্সট ও ক্যারেক্টার"),
+    MEDIA_GALLERY("Scene & Media", "দৃশ্য, ভিডিও ও অডিও"),
     MOTION_STYLE("Keyframe & SFX", "কী-ফ্রেম ও সাউন্ড"),
     SCENE_ORDER("Clips & Order", "শট ও টাইমলাইন")
 }
 
 data class StudioUiState(
     val destination: StudioDestination = StudioDestination.IMPORT_DASHBOARD,
-    val project: NewsProject = SampleNewsProjects.primeTimeBulletin(),
+    val project: NewsProject = SampleNewsProjects.banglaToonCanalNewsReel(),
     val selectedShotIndex: Int = 0,
     val isPlaying: Boolean = true,
     val playheadSeconds: Float = 0f,
@@ -81,8 +83,8 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
 
     private val _uiState = MutableStateFlow(
         StudioUiState(
-            codeEditorDraft = ProjectCodeParserAndGenerator.projectToJsonString(
-                SampleNewsProjects.primeTimeBulletin()
+            codeEditorDraft = ProjectCodeParserAndGenerator.projectToHtmlProjectCode(
+                SampleNewsProjects.banglaToonCanalNewsReel()
             )
         )
     )
@@ -123,8 +125,8 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun openPasteCodeSheet(prefillWithCurrent: Boolean = true) {
-        val currentCode = if (prefillWithCurrent) {
-            ProjectCodeParserAndGenerator.projectToJsonString(_uiState.value.project)
+        val currentCode = if (prefillWithCurrent && _uiState.value.codeEditorDraft.isBlank()) {
+            ProjectCodeParserAndGenerator.projectToHtmlProjectCode(_uiState.value.project)
         } else {
             _uiState.value.codeEditorDraft
         }
@@ -150,7 +152,9 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun loadSampleHtmlIntoDraft() {
-        val sampleHtml = ProjectCodeParserAndGenerator.projectToHtmlProjectCode(_uiState.value.project)
+        val sampleHtml = ProjectCodeParserAndGenerator.projectToHtmlProjectCode(
+            SampleNewsProjects.banglaToonCanalNewsReel()
+        )
         _uiState.update { it.copy(codeEditorDraft = sampleHtml) }
     }
 
@@ -167,14 +171,14 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
                     playheadSeconds = 0f,
                     isPlaying = true,
                     showPasteCodeSheet = false,
-                    codeEditorDraft = ProjectCodeParserAndGenerator.projectToJsonString(parsedProject),
-                    statusBannerMessage = "প্রজেক্ট ফাইল ইমপোর্ট সম্পন্ন! (${parsedProject.shots.size}টি দৃশ্য যুক্ত হয়েছে)"
+                    codeEditorDraft = rawCode,
+                    statusBannerMessage = "প্রজেক্ট ফাইল ইমপোর্ট সম্পন্ন: ${parsedProject.projectName} (${parsedProject.shots.size}টি শট যুক্ত হয়েছে)"
                 )
             }
         }.onFailure { err ->
             _uiState.update {
                 it.copy(
-                    statusBannerMessage = "ইমপোর্ট ত্রুটি: ${err.localizedMessage ?: "সঠিক JSON/SRT/প্রজেক্ট ফাইল দিন"}"
+                    statusBannerMessage = "ইমপোর্ট ত্রুটি: ${err.localizedMessage ?: "সঠিক HTML/JS/JSON/SRT প্রজেক্ট ফাইল দিন"}"
                 )
             }
         }
@@ -209,12 +213,15 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
         pausePlayback()
         val targetTab = when (hitElement) {
             CanvasElementType.HEADLINE,
+            CanvasElementType.HIGHLIGHT_WORD,
             CanvasElementType.SUBHEADLINE,
+            CanvasElementType.STAGE_BANNER_TEXT,
+            CanvasElementType.TOON_CHARACTER,
             CanvasElementType.CATEGORY_BADGE,
             CanvasElementType.LIVE_CHANNEL_BUG,
             CanvasElementType.CUSTOM_TEXT_LAYER,
             CanvasElementType.NEWS_TICKER -> InspectorTab.TEXT_SCRIPT
-            CanvasElementType.BACKDROP_MEDIA -> InspectorTab.MOTION_STYLE
+            CanvasElementType.BACKDROP_MEDIA -> InspectorTab.MEDIA_GALLERY
         }
         _uiState.update {
             it.copy(
@@ -247,10 +254,27 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
                     it.copy(showHeadline = nextShow)
                 }
             }
+            CanvasElementType.HIGHLIGHT_WORD -> {
+                updateSelectedShot {
+                    it.copy(highlightWord = if (it.highlightWord.isNotBlank()) "" else it.headline.split(" ").firstOrNull().orEmpty())
+                }
+            }
             CanvasElementType.SUBHEADLINE -> {
                 updateSelectedShot {
                     val nextShow = !it.showSubheadline
                     it.copy(showSubheadline = nextShow)
+                }
+            }
+            CanvasElementType.STAGE_BANNER_TEXT -> {
+                updateSelectedShot {
+                    val nextShow = !it.showStageBanner
+                    it.copy(showStageBanner = nextShow)
+                }
+            }
+            CanvasElementType.TOON_CHARACTER -> {
+                updateSelectedShot {
+                    val nextWho = if (it.toonWho == ToonCharacterWho.NONE) ToonCharacterWho.HOST else ToonCharacterWho.NONE
+                    it.copy(toonWho = nextWho)
                 }
             }
             CanvasElementType.CATEGORY_BADGE -> {
@@ -281,7 +305,7 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
             CanvasElementType.BACKDROP_MEDIA -> {
                 updateSelectedShot {
                     it.copy(
-                        mediaType = ShotMediaType.PRESET_PHOTO,
+                        mediaType = ShotMediaType.PRESET_SCENE,
                         customImageUri = null,
                         customVideoUri = null,
                         customMediaName = null
@@ -454,8 +478,24 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
         it.copy(headline = headline, showHeadline = true)
     }
 
+    fun updateHighlightWord(hiWord: String) = updateSelectedShot {
+        it.copy(highlightWord = hiWord)
+    }
+
     fun updateSubheadline(sub: String) = updateSelectedShot {
         it.copy(subheadline = sub, showSubheadline = true)
+    }
+
+    fun updateStageBannerText(bannerText: String) = updateSelectedShot {
+        it.copy(stageBannerText = bannerText, showStageBanner = true)
+    }
+
+    fun updateToonCharacterWho(who: ToonCharacterWho) = updateSelectedShot {
+        it.copy(toonWho = who)
+    }
+
+    fun updateToonCharacterPose(pose: ToonCharacterPose) = updateSelectedShot {
+        it.copy(toonPose = pose)
     }
 
     fun updateCategoryTag(tag: String) = updateSelectedShot {
@@ -517,7 +557,7 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
     fun updateShotBackdropPreset(preset: StudioBackdropPreset) = updateSelectedShot {
         it.copy(
             backdropPreset = preset,
-            mediaType = ShotMediaType.PRESET_PHOTO,
+            mediaType = ShotMediaType.PRESET_SCENE,
             customImageUri = null,
             customVideoUri = null,
             customMediaName = null
@@ -639,17 +679,21 @@ class StudioEditorViewModel(application: Application) : AndroidViewModel(applica
     fun addNewShot() {
         _uiState.update { state ->
             val nextIdx = state.project.shots.size + 1
-            val presets = StudioBackdropPreset.entries
-            val styles = LowerThirdStyle.entries
+            val currentShot = state.selectedShot
             val newShot = NewsShot(
-                categoryTag = "নতুন সংবাদ",
-                headline = "নতুন সংবাদ দৃশ্য $nextIdx: এখানে শিরোনাম লিখুন",
+                shotKey = "shot_$nextIdx",
+                categoryTag = "নতুন দৃশ্য #$nextIdx",
+                headline = "নতুন সংবাদ দৃশ্য $nextIdx: এখানে সংলাপ বা শিরোনাম লিখুন",
+                highlightWord = "নতুন সংবাদ",
                 subheadline = "সরাসরি ঢাকা স্টুডিও থেকে সম্প্রচারিত বিশেষ প্রতিবেদন",
+                stageBannerText = currentShot.stageBannerText,
                 reporterLocation = "ঢাকা স্টুডিও • LIVE",
-                durationSeconds = 5.0f,
+                durationSeconds = 6.0f,
                 motionPreset = MotionPreset.KEN_BURNS_IN,
-                lowerThirdStyle = styles[nextIdx % styles.size],
-                backdropPreset = presets[nextIdx % presets.size]
+                lowerThirdStyle = currentShot.lowerThirdStyle,
+                backdropPreset = currentShot.backdropPreset,
+                toonWho = currentShot.toonWho,
+                toonPose = if (nextIdx % 2 == 0) ToonCharacterPose.TALK else ToonCharacterPose.POINT
             )
             val updated = state.project.shots + newShot
             state.copy(

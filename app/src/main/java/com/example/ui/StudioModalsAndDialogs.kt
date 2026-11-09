@@ -1,5 +1,7 @@
 package com.example.ui
 
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -42,7 +45,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -65,6 +68,9 @@ import com.example.model.MotionGraphicOverlay
 import com.example.model.NewsProject
 import com.example.model.NewsShot
 import com.example.model.SoundEffectType
+import com.example.model.StudioBackdropPreset
+import com.example.model.ToonCharacterPose
+import com.example.model.ToonCharacterWho
 import com.example.model.VideoBitratePreset
 import com.example.model.VideoExportConfig
 import com.example.model.VideoResolutionPreset
@@ -88,6 +94,8 @@ fun PasteOrEditCodeDialog(
     onImportAndLaunch: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -112,7 +120,8 @@ fun PasteOrEditCodeDialog(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Code,
@@ -121,13 +130,13 @@ fun PasteOrEditCodeDialog(
                         )
                         Column {
                             Text(
-                                text = "প্রজেক্ট ফাইল বা কোড ইনপুট (JSON / SRT / Script)",
+                                text = "প্রজেক্ট কোড বা ফাইল ইনপুট করুন (HTML / JS / JSON / SRT)",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary
                             )
                             Text(
-                                text = "কোড পেস্ট করুন অথবা ফোনের স্টোরেজ থেকে ফাইল সিলেক্ট করুন",
+                                text = "আপনার দেওয়া কোডের সব শট (SHOTS), ক্যাপশন, হাইলাইট শব্দ ও দৃশ্য সরাসরি টাইমলাইনে চলে আসবে",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = TextSecondary
                             )
@@ -144,28 +153,59 @@ fun PasteOrEditCodeDialog(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = onLoadSampleJson,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
+                    // 1-Click Paste from Clipboard
+                    Button(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clipText = clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                            if (!clipText.isNullOrBlank()) {
+                                onCodeChange(clipText)
+                            }
+                        },
+                        modifier = Modifier.weight(1.1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BroadcastAmber,
+                            contentColor = Color(0xFF090D16)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
                     ) {
-                        Text("Sample JSON", fontSize = 12.sp, color = BroadcastEmerald)
+                        Icon(
+                            imageVector = Icons.Default.ContentPaste,
+                            contentDescription = "Paste Clipboard",
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("১-ক্লিক পেস্ট", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
+
                     OutlinedButton(
                         onClick = onLoadSampleHtml,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
                     ) {
-                        Text("Sample Script", fontSize = 12.sp, color = BroadcastAmber)
+                        Text("Bangla Toon কোড", fontSize = 11.sp, color = BroadcastAmber)
                     }
+
+                    OutlinedButton(
+                        onClick = onLoadSampleJson,
+                        modifier = Modifier.weight(0.9f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                    ) {
+                        Text("JSON কোড", fontSize = 11.sp, color = BroadcastEmerald)
+                    }
+
                     OutlinedButton(
                         onClick = onPickFileFromDevice,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
                     ) {
-                        Text("Upload File", fontSize = 12.sp, color = TextPrimary)
+                        Text("ফাইল ইনপুট", fontSize = 11.sp, color = TextPrimary)
                     }
                 }
 
@@ -183,7 +223,7 @@ fun PasteOrEditCodeDialog(
                     ),
                     placeholder = {
                         Text(
-                            text = "Paste JSON, SRT, XML, or script here...",
+                            text = "আপনার HTML/JS (const SHOTS = [...]) বা JSON কোড এখানে পেস্ট করুন...",
                             color = TextSecondary
                         )
                     },
@@ -224,7 +264,7 @@ fun PasteOrEditCodeDialog(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "ইমপোর্ট ও এডিটরে যান",
+                            text = "ভিডিও তৈরি ও এডিটরে যান",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -234,12 +274,6 @@ fun PasteOrEditCodeDialog(
     }
 }
 
-/**
- * Interactive On-Canvas Element Inspector Dialog:
- * Opens immediately when the user clicks on any part of the Live Video Preview Canvas
- * so they can fix text, delete text, add new text layers, fix keyframes, sound effects,
- * motion graphics, or replace video/photo from gallery!
- */
 @Composable
 fun QuickCanvasInlineEditDialog(
     shotIndex: Int,
@@ -250,7 +284,12 @@ fun QuickCanvasInlineEditDialog(
     onSelectElement: (CanvasElementType, Int?) -> Unit,
     onUpdateCategory: (String) -> Unit,
     onUpdateHeadline: (String) -> Unit,
+    onUpdateHighlightWord: (String) -> Unit,
     onUpdateSubheadline: (String) -> Unit,
+    onUpdateStageBannerText: (String) -> Unit,
+    onUpdateToonWho: (ToonCharacterWho) -> Unit,
+    onUpdateToonPose: (ToonCharacterPose) -> Unit,
+    onSelectBackdropPreset: (StudioBackdropPreset) -> Unit,
     onUpdateTicker: (String) -> Unit,
     onUpdateChannelName: (String) -> Unit,
     onDeleteOrRestoreElement: (CanvasElementType, Int?) -> Unit,
@@ -279,7 +318,6 @@ fun QuickCanvasInlineEditDialog(
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -303,7 +341,6 @@ fun QuickCanvasInlineEditDialog(
                     }
                 }
 
-                // Element Switcher Pills
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -334,14 +371,21 @@ fun QuickCanvasInlineEditDialog(
                     }
                 }
 
-                // Context-Aware Editor for the Clicked Canvas Element
                 when (selectedElement) {
-                    CanvasElementType.HEADLINE -> {
+                    CanvasElementType.HEADLINE,
+                    CanvasElementType.HIGHLIGHT_WORD -> {
                         OutlinedTextField(
                             value = shot.headline,
                             onValueChange = onUpdateHeadline,
-                            label = { Text("প্রধান শিরোনাম (Main Headline)") },
+                            label = { Text("প্রধান শিরোনাম / ক্যাপশন টেক্সট (text)") },
                             maxLines = 3,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = shot.highlightWord,
+                            onValueChange = onUpdateHighlightWord,
+                            label = { Text("হলুদ হাইলাইট শব্দ (hi — যেমন: কুড়ি হাজার কিলোমিটার)") },
+                            singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -354,6 +398,80 @@ fun QuickCanvasInlineEditDialog(
                             maxLines = 3,
                             modifier = Modifier.fillMaxWidth()
                         )
+                    }
+
+                    CanvasElementType.STAGE_BANNER_TEXT -> {
+                        OutlinedTextField(
+                            value = shot.stageBannerText,
+                            onValueChange = onUpdateStageBannerText,
+                            label = { Text("মঞ্চ ব্যানার লেখা (যেমন: ৫৫তম জাতীয় সমবায় দিবস)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    CanvasElementType.TOON_CHARACTER -> {
+                        Text(
+                            text = "অ্যানিমেটেড ২ডি ক্যারেক্টার (who) সিলেক্ট করুন:",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = BroadcastAmber
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ToonCharacterWho.entries.forEach { whoOption ->
+                                val selected = shot.toonWho == whoOption
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (selected) BroadcastCrimson else StudioObsidian)
+                                        .border(1.dp, StudioCardBorder, RoundedCornerShape(10.dp))
+                                        .clickable { onUpdateToonWho(whoOption) }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = whoOption.banglaLabel,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "ক্যারেক্টার অ্যানিমেশন ভঙ্গি (pose):",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = BroadcastEmerald
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ToonCharacterPose.entries.forEach { poseOption ->
+                                val selected = shot.toonPose == poseOption
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (selected) BroadcastAmber else StudioObsidian)
+                                        .border(1.dp, StudioCardBorder, RoundedCornerShape(10.dp))
+                                        .clickable { onUpdateToonPose(poseOption) }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = poseOption.banglaLabel,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selected) Color(0xFF090D16) else TextPrimary
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     CanvasElementType.CATEGORY_BADGE -> {
@@ -420,7 +538,7 @@ fun QuickCanvasInlineEditDialog(
                             }
                         } else {
                             Text(
-                                text = "কোনো অতিরিক্ত টেক্সট লেয়ার নেই। নিচে '+ নতুন টেক্সট এড করুন' বাটনে চাপুন।",
+                                text = "কোনো অতিরিক্ত টেক্সট লেয়ার নেই। নিচে '+ নতুন টেক্সট এড' বাটনে চাপুন।",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = TextSecondary
                             )
@@ -429,10 +547,35 @@ fun QuickCanvasInlineEditDialog(
 
                     CanvasElementType.BACKDROP_MEDIA -> {
                         Text(
-                            text = "ব্যাকগ্রাউন্ড ভিডিও/ফটো, মোশন গ্রাফিক্স ও সাউন্ড ইফেক্ট পরিবর্তন করুন:",
+                            text = "২ডি অ্যানিমেটেড দৃশ্য (canal / stage / house) বা স্টুডিও ব্যাকগ্রাউন্ড বদলান:",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            StudioBackdropPreset.entries.forEach { preset ->
+                                val selected = shot.backdropPreset == preset
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (selected) BroadcastCrimson else StudioObsidian)
+                                        .border(1.dp, StudioCardBorder, RoundedCornerShape(10.dp))
+                                        .clickable { onSelectBackdropPreset(preset) }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = preset.banglaTitle,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
                         Button(
                             onClick = onPickGalleryVideoOrPhoto,
                             modifier = Modifier.fillMaxWidth(),
@@ -445,7 +588,6 @@ fun QuickCanvasInlineEditDialog(
                     }
                 }
 
-                // Quick Action Row: Delete Selected Text / Add New Text / Replace Media
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -489,7 +631,6 @@ fun QuickCanvasInlineEditDialog(
                     }
                 }
 
-                // Quick Fix for Motion Graphics & Sound Effects (SFX)
                 Text(
                     text = "সাউন্ড ইফেক্ট (SFX) ও মোশন গ্রাফিক্স ঠিক করুন:",
                     style = MaterialTheme.typography.labelLarge,
@@ -551,10 +692,6 @@ fun QuickCanvasInlineEditDialog(
     }
 }
 
-/**
- * Professional Video Export Modal with Resolution (144p, 360p, 480p, 720p, 1080p, 1480p),
- * Bitrate (1 Mbps - 16 Mbps), FPS (24, 30, 60), and Turbo Hardware MP4 Encoding!
- */
 @Composable
 fun ExportMp4Modal(
     exportState: ExportMp4State,
@@ -628,7 +765,6 @@ fun ExportMp4Modal(
                             }
                         }
 
-                        // 1. Resolution Selection (144p, 360p, 480p, 720p, 1080p, 1480p)
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -676,7 +812,6 @@ fun ExportMp4Modal(
                             }
                         }
 
-                        // 2. Bitrate Selection
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -717,7 +852,6 @@ fun ExportMp4Modal(
                             }
                         }
 
-                        // 3. Frame Rate (FPS) Selection
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -750,7 +884,6 @@ fun ExportMp4Modal(
                             }
                         }
 
-                        // Start Fast Hardware Render Button
                         Button(
                             onClick = onStartRenderClick,
                             modifier = Modifier
@@ -889,9 +1022,9 @@ fun ExportMp4Modal(
                             modifier = Modifier.size(48.dp)
                         )
                         Text(
-                            text = "রেন্ডার ব্যর্থ হয়েছে",
+                            text = "Export Error",
                             style = MaterialTheme.typography.titleLarge,
-                            color = TextPrimary
+                            color = BroadcastCrimson
                         )
                         Text(
                             text = exportState.message,
@@ -900,9 +1033,9 @@ fun ExportMp4Modal(
                         )
                         Button(
                             onClick = onDismiss,
-                            colors = ButtonDefaults.buttonColors(containerColor = BroadcastCrimson)
+                            colors = ButtonDefaults.buttonColors(containerColor = StudioSurfaceElevated)
                         ) {
-                            Text("Close")
+                            Text("Dismiss", color = TextPrimary)
                         }
                     }
 

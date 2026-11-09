@@ -77,7 +77,7 @@ class Mp4VideoExporter(
 
     /**
      * High-speed Hardware H.264 + AAC `.mp4` Exporter supporting 144p, 360p, 480p, 720p, 1080p, and 1480p
-     * with user-selected bitrate and non-blocking zero-wait buffer draining for fast video saving.
+     * with strictly monotonic timestamps and safe MediaMuxer track lifecycle management.
      */
     suspend fun exportProjectToMp4(
         project: NewsProject,
@@ -98,7 +98,6 @@ class Mp4VideoExporter(
                 "${safeTitle}_${resPreset.label.replace(" ", "")}_${System.currentTimeMillis()}.mp4"
             )
 
-            // Fallback gracefully if a device codec doesn't support 1480p by trying the requested resolution first
             val (width, height, videoEncoder) = createConfiguredVideoEncoder(exportConfig)
             val fps = exportConfig.fps.coerceIn(24, 60)
             val totalDurationSec = project.totalDurationSeconds.coerceIn(2f, 180f)
@@ -120,6 +119,7 @@ class Mp4VideoExporter(
             }
 
             val sampleRate = 44100
+            val audioSamplesPerFrame = sampleRate / fps
             val audioFormat = MediaFormat.createAudioFormat(
                 MediaFormat.MIMETYPE_AUDIO_AAC,
                 sampleRate,
@@ -141,16 +141,36 @@ class Mp4VideoExporter(
             var audioTrackIndex = -1
             var muxerStarted = false
 
+            var videoSamplesWritten = 0L
+            var audioSamplesWritten = 0L
+            var totalAudioSamplesQueued = 0L
+            var lastVideoPtsUs = -1L
+            var lastAudioPtsUs = -1L
+
             val videoBufferInfo = MediaCodec.BufferInfo()
             val audioBufferInfo = MediaCodec.BufferInfo()
-            val audioSamplesPerFrame = sampleRate / fps
+
+            // Prime the audio encoder with the first frame of audio so its output format is ready immediately
+            if (audioEncoder != null) {
+                totalAudioSamplesQueued = feedPcmSamplesWithSfx(
+                    audioEncoder = audioEncoder,
+                    startSample = totalAudioSamplesQueued,
+                    sampleCount = audioSamplesPerFrame,
+                    sampleRate = sampleRate,
+                    useSynthBed = project.useStudioSynthAudio,
+                    shotTransitions = shotTransitions,
+                    endOfStream = false,
+                    timeoutUs = 5_000L
+                )
+            }
+
+            var exportCompletedNormally = false
 
             try {
                 for (frameIdx in 0 until totalFrames) {
                     coroutineContext.ensureActive()
 
                     val timeSec = frameIdx.toFloat() / fps.toFloat()
-                    val presentationTimeUs = (frameIdx * 1_000_000L) / fps
 
                     val surfaceCanvas = inputSurface.lockCanvas(null)
                     try {
@@ -166,54 +186,90 @@ class Mp4VideoExporter(
                         inputSurface.unlockCanvasAndPost(surfaceCanvas)
                     }
 
-                    // Non-blocking drain (0L timeout when muxer is running) for maximum rendering speed!
+                    // Feed audio for subsequent frames
+                    if (audioEncoder != null && frameIdx > 0) {
+                        totalAudioSamplesQueued = feedPcmSamplesWithSfx(
+                            audioEncoder = audioEncoder,
+                            startSample = totalAudioSamplesQueued,
+                            sampleCount = audioSamplesPerFrame,
+                            sampleRate = sampleRate,
+                            useSynthBed = project.useStudioSynthAudio,
+                            shotTransitions = shotTransitions,
+                            endOfStream = false,
+                            timeoutUs = if (muxerStarted) 0L else 2_000L
+                        )
+                    }
+
+                    // Drain video encoder
                     val drainTimeoutUs = if (muxerStarted) 0L else 5_000L
                     while (true) {
                         val outIndex = videoEncoder.dequeueOutputBuffer(videoBufferInfo, drainTimeoutUs)
                         if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                             break
                         } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                            videoTrackIndex = muxer.addTrack(videoEncoder.outputFormat)
-                            if (!muxerStarted && audioEncoder == null) {
-                                muxer.start()
-                                muxerStarted = true
-                            } else if (!muxerStarted && audioEncoder != null) {
-                                feedSilentAudioHeader(audioEncoder)
-                                val aIdx = audioEncoder.dequeueOutputBuffer(audioBufferInfo, 5_000L)
-                                if (aIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                                    audioTrackIndex = muxer.addTrack(audioEncoder.outputFormat)
-                                } else if (aIdx >= 0) {
-                                    audioEncoder.releaseOutputBuffer(aIdx, false)
+                            if (!muxerStarted && videoTrackIndex < 0) {
+                                videoTrackIndex = muxer.addTrack(videoEncoder.outputFormat)
+                            }
+                            if (!muxerStarted) {
+                                // Try to obtain audio output format before starting muxer
+                                if (audioEncoder != null && audioTrackIndex < 0) {
+                                    for (attempt in 0 until 10) {
+                                        val aIdx = audioEncoder.dequeueOutputBuffer(audioBufferInfo, 3_000L)
+                                        if (aIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                                            audioTrackIndex = muxer.addTrack(audioEncoder.outputFormat)
+                                            break
+                                        } else if (aIdx >= 0) {
+                                            audioEncoder.releaseOutputBuffer(aIdx, false)
+                                        } else {
+                                            totalAudioSamplesQueued = feedPcmSamplesWithSfx(
+                                                audioEncoder = audioEncoder,
+                                                startSample = totalAudioSamplesQueued,
+                                                sampleCount = audioSamplesPerFrame,
+                                                sampleRate = sampleRate,
+                                                useSynthBed = project.useStudioSynthAudio,
+                                                shotTransitions = shotTransitions,
+                                                endOfStream = false,
+                                                timeoutUs = 2_000L
+                                            )
+                                        }
+                                    }
                                 }
                                 muxer.start()
                                 muxerStarted = true
                             }
                         } else if (outIndex >= 0) {
                             val encodedData = videoEncoder.getOutputBuffer(outIndex)
-                            if (encodedData != null && videoBufferInfo.size > 0 && muxerStarted &&
-                                (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
-                            ) {
-                                videoBufferInfo.presentationTimeUs = presentationTimeUs
+                            val isConfig = (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                            if (encodedData != null && videoBufferInfo.size > 0 && muxerStarted && !isConfig) {
+                                var ptsUs = (videoSamplesWritten * 1_000_000L) / fps
+                                if (ptsUs <= lastVideoPtsUs) {
+                                    ptsUs = lastVideoPtsUs + (1_000_000L / fps).coerceAtLeast(1000L)
+                                }
+                                lastVideoPtsUs = ptsUs
+                                videoBufferInfo.presentationTimeUs = ptsUs
+
                                 encodedData.position(videoBufferInfo.offset)
                                 encodedData.limit(videoBufferInfo.offset + videoBufferInfo.size)
                                 muxer.writeSampleData(videoTrackIndex, encodedData, videoBufferInfo)
+                                videoSamplesWritten++
                             }
                             videoEncoder.releaseOutputBuffer(outIndex, false)
                         }
                     }
 
+                    // Drain audio encoder when muxer is running
                     if (audioEncoder != null && muxerStarted && audioTrackIndex >= 0) {
-                        val startSample = frameIdx.toLong() * audioSamplesPerFrame
-                        feedPcmSamplesWithSfx(
+                        val (writtenCount, updatedLastPts) = drainAudioEncoder(
                             audioEncoder = audioEncoder,
-                            startSample = startSample,
-                            sampleCount = audioSamplesPerFrame,
-                            sampleRate = sampleRate,
-                            useSynthBed = project.useStudioSynthAudio,
-                            shotTransitions = shotTransitions,
-                            endOfStream = false
+                            bufferInfo = audioBufferInfo,
+                            muxer = muxer,
+                            audioTrackIndex = audioTrackIndex,
+                            lastAudioPtsUs = lastAudioPtsUs,
+                            timeoutUs = 0L,
+                            waitUntilEos = false
                         )
-                        drainAudioEncoder(audioEncoder, audioBufferInfo, muxer, audioTrackIndex)
+                        audioSamplesWritten += writtenCount
+                        lastAudioPtsUs = updatedLastPts
                     }
 
                     if (frameIdx % 5 == 0 || frameIdx == totalFrames - 1) {
@@ -229,50 +285,100 @@ class Mp4VideoExporter(
                     }
                 }
 
-                // Final drain of remaining video frames
+                // Final drain of remaining video frames with strictly monotonic PTS
                 videoEncoder.signalEndOfInputStream()
                 var eosRetries = 0
-                while (eosRetries < 40) {
+                while (eosRetries < 60) {
                     val outIndex = videoEncoder.dequeueOutputBuffer(videoBufferInfo, 5_000L)
                     if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                         eosRetries++
                         continue
+                    } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        if (!muxerStarted && videoTrackIndex < 0) {
+                            videoTrackIndex = muxer.addTrack(videoEncoder.outputFormat)
+                            muxer.start()
+                            muxerStarted = true
+                        }
+                        continue
+                    } else if (outIndex < 0) {
+                        break
                     }
-                    if (outIndex < 0) break
+
                     val encodedData = videoEncoder.getOutputBuffer(outIndex)
-                    if (encodedData != null && videoBufferInfo.size > 0 && muxerStarted &&
-                        (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
-                    ) {
+                    val isConfig = (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                    if (encodedData != null && videoBufferInfo.size > 0 && muxerStarted && !isConfig) {
+                        var ptsUs = (videoSamplesWritten * 1_000_000L) / fps
+                        if (ptsUs <= lastVideoPtsUs) {
+                            ptsUs = lastVideoPtsUs + (1_000_000L / fps).coerceAtLeast(1000L)
+                        }
+                        lastVideoPtsUs = ptsUs
+                        videoBufferInfo.presentationTimeUs = ptsUs
+
                         encodedData.position(videoBufferInfo.offset)
                         encodedData.limit(videoBufferInfo.offset + videoBufferInfo.size)
                         muxer.writeSampleData(videoTrackIndex, encodedData, videoBufferInfo)
+                        videoSamplesWritten++
                     }
                     videoEncoder.releaseOutputBuffer(outIndex, false)
                     if ((videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
                 }
 
+                // Final drain of audio encoder (guaranteeing at least 1 sample written if audioTrackIndex >= 0)
                 if (audioEncoder != null && muxerStarted && audioTrackIndex >= 0) {
-                    feedPcmSamplesWithSfx(
+                    if (audioSamplesWritten == 0L) {
+                        totalAudioSamplesQueued = feedPcmSamplesWithSfx(
+                            audioEncoder = audioEncoder,
+                            startSample = totalAudioSamplesQueued,
+                            sampleCount = audioSamplesPerFrame,
+                            sampleRate = sampleRate,
+                            useSynthBed = project.useStudioSynthAudio,
+                            shotTransitions = shotTransitions,
+                            endOfStream = false,
+                            timeoutUs = 5_000L
+                        )
+                    }
+                    totalAudioSamplesQueued = feedPcmSamplesWithSfx(
                         audioEncoder = audioEncoder,
-                        startSample = totalFrames.toLong() * audioSamplesPerFrame,
+                        startSample = totalAudioSamplesQueued,
                         sampleCount = 0,
                         sampleRate = sampleRate,
                         useSynthBed = project.useStudioSynthAudio,
                         shotTransitions = shotTransitions,
-                        endOfStream = true
+                        endOfStream = true,
+                        timeoutUs = 5_000L
                     )
-                    drainAudioEncoder(audioEncoder, audioBufferInfo, muxer, audioTrackIndex)
+                    val (writtenCount, updatedLastPts) = drainAudioEncoder(
+                        audioEncoder = audioEncoder,
+                        bufferInfo = audioBufferInfo,
+                        muxer = muxer,
+                        audioTrackIndex = audioTrackIndex,
+                        lastAudioPtsUs = lastAudioPtsUs,
+                        timeoutUs = 5_000L,
+                        waitUntilEos = true
+                    )
+                    audioSamplesWritten += writtenCount
+                    lastAudioPtsUs = updatedLastPts
                 }
+
+                exportCompletedNormally = true
             } finally {
                 runCatching { videoEncoder.stop() }
                 runCatching { videoEncoder.release() }
                 runCatching { inputSurface.release() }
                 runCatching { audioEncoder?.stop() }
                 runCatching { audioEncoder?.release() }
-                if (muxerStarted) {
+
+                // Only call muxer.stop() if muxer was started AND all added tracks received at least 1 sample
+                val allTracksStarted = videoSamplesWritten > 0L &&
+                    (audioTrackIndex < 0 || audioSamplesWritten > 0L)
+                if (muxerStarted && allTracksStarted && exportCompletedNormally) {
                     runCatching { muxer.stop() }
                 }
                 runCatching { muxer.release() }
+
+                if (!exportCompletedNormally && outputFile.exists()) {
+                    runCatching { outputFile.delete() }
+                }
             }
 
             val elapsedMs = (System.currentTimeMillis() - startTimeMs).coerceAtLeast(100L)
@@ -344,19 +450,9 @@ class Mp4VideoExporter(
         return Triple(fallbackW, fallbackH, codec)
     }
 
-    private fun feedSilentAudioHeader(audioEncoder: MediaCodec) {
-        val inIdx = audioEncoder.dequeueInputBuffer(5_000L)
-        if (inIdx >= 0) {
-            val buf = audioEncoder.getInputBuffer(inIdx) ?: return
-            buf.clear()
-            val count = 1024
-            for (i in 0 until count) {
-                buf.putShort(0)
-            }
-            audioEncoder.queueInputBuffer(inIdx, 0, count * 2, 0L, 0)
-        }
-    }
-
+    /**
+     * Feeds synthesized PCM audio samples + SFX into the AAC encoder and returns the updated `totalAudioSamplesQueued`.
+     */
     private fun feedPcmSamplesWithSfx(
         audioEncoder: MediaCodec,
         startSample: Long,
@@ -364,11 +460,12 @@ class Mp4VideoExporter(
         sampleRate: Int,
         useSynthBed: Boolean,
         shotTransitions: List<Pair<Float, SoundEffectType>>,
-        endOfStream: Boolean
-    ) {
-        val inIdx = audioEncoder.dequeueInputBuffer(0L)
-        if (inIdx < 0) return
-        val inputBuffer: ByteBuffer = audioEncoder.getInputBuffer(inIdx) ?: return
+        endOfStream: Boolean,
+        timeoutUs: Long
+    ): Long {
+        val inIdx = audioEncoder.dequeueInputBuffer(timeoutUs)
+        if (inIdx < 0) return startSample
+        val inputBuffer: ByteBuffer = audioEncoder.getInputBuffer(inIdx) ?: return startSample
         inputBuffer.clear()
 
         val ptsUs = (startSample * 1_000_000L) / sampleRate
@@ -380,10 +477,13 @@ class Mp4VideoExporter(
                 ptsUs,
                 MediaCodec.BUFFER_FLAG_END_OF_STREAM
             )
-            return
+            return startSample
         }
 
-        for (i in 0 until sampleCount) {
+        val maxShorts = inputBuffer.remaining() / 2
+        val actualCount = sampleCount.coerceAtMost(maxShorts)
+
+        for (i in 0 until actualCount) {
             val globalSample = startSample + i
             val t = globalSample.toDouble() / sampleRate.toDouble()
             var mixSample = 0.0
@@ -414,28 +514,55 @@ class Mp4VideoExporter(
             inputBuffer.putShort(clamped)
         }
 
-        audioEncoder.queueInputBuffer(inIdx, 0, sampleCount * 2, ptsUs, 0)
+        audioEncoder.queueInputBuffer(inIdx, 0, actualCount * 2, ptsUs, 0)
+        return startSample + actualCount
     }
 
+    /**
+     * Drains encoded AAC packets into the MediaMuxer with strictly monotonic timestamps.
+     * Returns `(samplesWrittenCount, updatedLastAudioPtsUs)`.
+     */
     private fun drainAudioEncoder(
         audioEncoder: MediaCodec,
         bufferInfo: MediaCodec.BufferInfo,
         muxer: MediaMuxer,
-        audioTrackIndex: Int
-    ) {
-        while (true) {
-            val outIdx = audioEncoder.dequeueOutputBuffer(bufferInfo, 0L)
-            if (outIdx < 0) break
+        audioTrackIndex: Int,
+        lastAudioPtsUs: Long,
+        timeoutUs: Long,
+        waitUntilEos: Boolean
+    ): Pair<Long, Long> {
+        var written = 0L
+        var currentLastPts = lastAudioPtsUs
+        var retries = 0
+        val maxRetries = if (waitUntilEos) 30 else 1
+
+        while (retries < maxRetries) {
+            val outIdx = audioEncoder.dequeueOutputBuffer(bufferInfo, timeoutUs)
+            if (outIdx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                if (!waitUntilEos) break
+                retries++
+                continue
+            } else if (outIdx < 0) {
+                break
+            }
+
             val encodedData = audioEncoder.getOutputBuffer(outIdx)
-            if (encodedData != null && bufferInfo.size > 0 &&
-                (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
-            ) {
+            val isConfig = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+            if (encodedData != null && bufferInfo.size > 0 && !isConfig) {
+                if (bufferInfo.presentationTimeUs <= currentLastPts) {
+                    bufferInfo.presentationTimeUs = currentLastPts + 1_000L
+                }
+                currentLastPts = bufferInfo.presentationTimeUs
+
                 encodedData.position(bufferInfo.offset)
                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                 muxer.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
+                written++
             }
             audioEncoder.releaseOutputBuffer(outIdx, false)
             if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
         }
+
+        return written to currentLastPts
     }
 }

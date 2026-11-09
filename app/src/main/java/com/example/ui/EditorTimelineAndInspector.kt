@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.MusicNote
@@ -76,6 +77,8 @@ import com.example.model.ShotMediaType
 import com.example.model.SoundEffectType
 import com.example.model.StudioBackdropPreset
 import com.example.model.TextAnimationStyle
+import com.example.model.ToonCharacterPose
+import com.example.model.ToonCharacterWho
 import com.example.ui.theme.BroadcastAmber
 import com.example.ui.theme.BroadcastCrimson
 import com.example.ui.theme.BroadcastEmerald
@@ -119,7 +122,7 @@ fun MultiTrackTimelineSection(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "TIMELINE",
+                    text = "TIMELINE (${project.shots.size} SHOTS)",
                     style = MaterialTheme.typography.labelMedium,
                     color = BroadcastAmber
                 )
@@ -165,7 +168,7 @@ fun MultiTrackTimelineSection(
                 Box(
                     modifier = Modifier
                         .width(96.dp)
-                        .height(74.dp)
+                        .height(76.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(StudioSurfaceElevated)
                         .border(1.dp, BroadcastAmber.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
@@ -247,8 +250,8 @@ private fun TimelineShotBlock(
 
     Row(
         modifier = Modifier
-            .width(205.dp)
-            .height(74.dp)
+            .width(215.dp)
+            .height(76.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(containerColor)
             .border(if (isSelected) 2.dp else 1.dp, borderColor, RoundedCornerShape(12.dp))
@@ -260,16 +263,38 @@ private fun TimelineShotBlock(
     ) {
         Box(
             modifier = Modifier
-                .width(54.dp)
+                .width(56.dp)
                 .fillMaxHeight()
                 .clip(RoundedCornerShape(8.dp))
         ) {
-            Image(
-                painter = painterResource(id = shot.backdropPreset.drawableRes),
-                contentDescription = shot.headline,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+            if (shot.backdropPreset.isToonVectorScene && shot.mediaType == ShotMediaType.PRESET_SCENE) {
+                val sceneBgColor = when (shot.backdropPreset) {
+                    StudioBackdropPreset.TOON_CANAL -> Color(0xFF1F7A74)
+                    StudioBackdropPreset.TOON_STAGE -> Color(0xFF9F1C24)
+                    StudioBackdropPreset.TOON_HOUSE -> Color(0xFF4A7856)
+                    else -> Color(0xFF1E293B)
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(sceneBgColor),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = shot.backdropPreset.id.uppercase(),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFF2A900)
+                    )
+                }
+            } else {
+                Image(
+                    painter = painterResource(id = shot.backdropPreset.drawableRes),
+                    contentDescription = shot.headline,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -305,7 +330,7 @@ private fun TimelineShotBlock(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = shot.categoryTag.ifBlank { "শট #${index + 1}" },
+                    text = shot.highlightWord.ifBlank { shot.categoryTag.ifBlank { "শট #${index + 1}" } },
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = BroadcastAmber,
@@ -331,9 +356,9 @@ private fun TimelineShotBlock(
             )
 
             Text(
-                text = "${shot.motionPreset.banglaLabel} • ${shot.soundEffect.banglaLabel}",
+                text = "${shot.backdropPreset.banglaTitle} • ${shot.toonWho.banglaLabel}",
                 fontSize = 9.sp,
-                color = TextSecondary,
+                color = BroadcastEmerald,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -350,7 +375,11 @@ fun InlineShotInspectorPanel(
     onSelectTab: (InspectorTab) -> Unit,
     onUpdateCategory: (String) -> Unit,
     onUpdateHeadline: (String) -> Unit,
+    onUpdateHighlightWord: (String) -> Unit,
     onUpdateSubheadline: (String) -> Unit,
+    onUpdateStageBannerText: (String) -> Unit,
+    onUpdateToonWho: (ToonCharacterWho) -> Unit,
+    onUpdateToonPose: (ToonCharacterPose) -> Unit,
     onUpdateReporterLocation: (String) -> Unit,
     onUpdateChannelName: (String) -> Unit,
     onUpdateTickerText: (String) -> Unit,
@@ -437,7 +466,11 @@ fun InlineShotInspectorPanel(
                         project = project,
                         onUpdateCategory = onUpdateCategory,
                         onUpdateHeadline = onUpdateHeadline,
+                        onUpdateHighlightWord = onUpdateHighlightWord,
                         onUpdateSubheadline = onUpdateSubheadline,
+                        onUpdateStageBannerText = onUpdateStageBannerText,
+                        onUpdateToonWho = onUpdateToonWho,
+                        onUpdateToonPose = onUpdateToonPose,
                         onUpdateReporterLocation = onUpdateReporterLocation,
                         onUpdateChannelName = onUpdateChannelName,
                         onUpdateTickerText = onUpdateTickerText,
@@ -496,7 +529,11 @@ private fun TextAndLayersInspectorContent(
     project: NewsProject,
     onUpdateCategory: (String) -> Unit,
     onUpdateHeadline: (String) -> Unit,
+    onUpdateHighlightWord: (String) -> Unit,
     onUpdateSubheadline: (String) -> Unit,
+    onUpdateStageBannerText: (String) -> Unit,
+    onUpdateToonWho: (ToonCharacterWho) -> Unit,
+    onUpdateToonPose: (ToonCharacterPose) -> Unit,
     onUpdateReporterLocation: (String) -> Unit,
     onUpdateChannelName: (String) -> Unit,
     onUpdateTickerText: (String) -> Unit,
@@ -522,7 +559,7 @@ private fun TextAndLayersInspectorContent(
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = "শট #${shotIndex + 1} টেক্সট এডিট, ডিলিট ও নতুন টেক্সট লেয়ার",
+                    text = "শট #${shotIndex + 1} সংলাপ, হাইলাইট শব্দ ও ক্যারেক্টার এডিট",
                     style = MaterialTheme.typography.labelLarge,
                     color = BroadcastAmber
                 )
@@ -595,7 +632,7 @@ private fun TextAndLayersInspectorContent(
             }
         }
 
-        // Main Headline with Delete/Hide Toggle
+        // Main Headline / Caption with Delete/Hide Toggle
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -604,7 +641,7 @@ private fun TextAndLayersInspectorContent(
             OutlinedTextField(
                 value = shot.headline,
                 onValueChange = onUpdateHeadline,
-                label = { Text("প্রধান শিরোনাম (Main Headline)") },
+                label = { Text("প্রধান সংলাপ / শিরোনাম (text / Headline)") },
                 maxLines = 2,
                 modifier = Modifier
                     .weight(1f)
@@ -622,6 +659,98 @@ private fun TextAndLayersInspectorContent(
                     contentDescription = "Delete or Restore Headline",
                     tint = if (shot.showHeadline) BroadcastCrimson else TextSecondary
                 )
+            }
+        }
+
+        // Highlight Word (`hi`) & Stage Banner (`৫৫তম জাতীয় সমবায় দিবস`)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = shot.highlightWord,
+                onValueChange = onUpdateHighlightWord,
+                label = { Text("হলুদ হাইলাইট শব্দ (hi)") },
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("shot_highlight_word_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BroadcastAmber,
+                    unfocusedBorderColor = StudioCardBorder
+                )
+            )
+
+            OutlinedTextField(
+                value = shot.stageBannerText,
+                onValueChange = onUpdateStageBannerText,
+                label = { Text("মঞ্চ ব্যানার (Stage Banner)") },
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        // 2D Animated Character (Host / Minister / Pose) Selector
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Face,
+                contentDescription = "Toon Character",
+                tint = BroadcastEmerald,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = "২ডি অ্যানিমেটেড ক্যারেক্টার (who) ও হাত/কথার ভঙ্গি (pose):",
+                style = MaterialTheme.typography.labelMedium,
+                color = BroadcastEmerald
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ToonCharacterWho.entries.forEach { whoOption ->
+                val selected = shot.toonWho == whoOption
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (selected) BroadcastCrimson else StudioObsidian)
+                        .border(1.dp, StudioCardBorder, RoundedCornerShape(8.dp))
+                        .clickable { onUpdateToonWho(whoOption) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = whoOption.banglaLabel,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+
+            ToonCharacterPose.entries.forEach { poseOption ->
+                val selected = shot.toonPose == poseOption
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (selected) BroadcastAmber else StudioObsidian)
+                        .border(1.dp, StudioCardBorder, RoundedCornerShape(8.dp))
+                        .clickable { onUpdateToonPose(poseOption) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = poseOption.banglaLabel,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (selected) Color(0xFF090D16) else TextPrimary
+                    )
+                }
             }
         }
 
@@ -803,20 +932,22 @@ private fun MediaAndGalleryInspectorContent(
         }
 
         Text(
-            text = "অথবা স্টুডিও ব্যাকগ্রাউন্ড টেমপ্লেট সিলেক্ট করুন:",
+            text = "অথবা ২ডি অ্যানিমেটেড দৃশ্য (canal / stage / house) ও টিভি স্টুডিও ব্যাকগ্রাউন্ড সিলেক্ট করুন:",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             StudioBackdropPreset.entries.forEach { preset ->
-                val isSelected = shot.mediaType == ShotMediaType.PRESET_PHOTO && shot.backdropPreset == preset
+                val isSelected = shot.mediaType == ShotMediaType.PRESET_SCENE && shot.backdropPreset == preset
                 Column(
                     modifier = Modifier
-                        .weight(1f)
+                        .width(126.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(StudioObsidian)
                         .border(
@@ -828,19 +959,42 @@ private fun MediaAndGalleryInspectorContent(
                         .padding(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Image(
-                        painter = painterResource(id = preset.drawableRes),
-                        contentDescription = preset.title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                    )
+                    if (preset.isToonVectorScene) {
+                        val bgCol = when (preset) {
+                            StudioBackdropPreset.TOON_CANAL -> Color(0xFF1F7A74)
+                            StudioBackdropPreset.TOON_STAGE -> Color(0xFF9F1C24)
+                            else -> Color(0xFF4A7856)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(bgCol),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "2D • ${preset.id.uppercase()}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFF2A900)
+                            )
+                        }
+                    } else {
+                        Image(
+                            painter = painterResource(id = preset.drawableRes),
+                            contentDescription = preset.title,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                        )
+                    }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = preset.title,
-                        fontSize = 11.sp,
+                        text = preset.banglaTitle,
+                        fontSize = 10.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                         color = if (isSelected) BroadcastAmber else TextPrimary,
                         maxLines = 1,

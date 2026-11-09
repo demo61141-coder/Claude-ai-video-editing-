@@ -38,7 +38,7 @@ fun BanglaNewsStudioProApp(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    // 1. Universal Video Project File Picker (.json, .srt, .xml, .txt, .html)
+    // 1. Universal Video Project File Picker (.html, .js, .json, .srt, .xml, .txt)
     val codeFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -89,7 +89,7 @@ fun BanglaNewsStudioProApp(
                 currentProject = uiState.project,
                 onPickCodeFileClick = {
                     codeFilePickerLauncher.launch(
-                        arrayOf("application/json", "text/*", "*/*")
+                        arrayOf("text/html", "application/json", "text/*", "*/*")
                     )
                 },
                 onOpenPasteCodeSheet = {
@@ -138,7 +138,11 @@ fun BanglaNewsStudioProApp(
                 onDismissStatusBanner = { viewModel.clearStatusBanner() },
                 onUpdateCategory = { viewModel.updateCategoryTag(it) },
                 onUpdateHeadline = { viewModel.updateHeadline(it) },
+                onUpdateHighlightWord = { viewModel.updateHighlightWord(it) },
                 onUpdateSubheadline = { viewModel.updateSubheadline(it) },
+                onUpdateStageBannerText = { viewModel.updateStageBannerText(it) },
+                onUpdateToonWho = { viewModel.updateToonCharacterWho(it) },
+                onUpdateToonPose = { viewModel.updateToonCharacterPose(it) },
                 onUpdateReporterLocation = { viewModel.updateReporterLocation(it) },
                 onUpdateChannelName = { viewModel.updateProjectMetadata(channelName = it) },
                 onUpdateTickerText = { viewModel.updateProjectMetadata(tickerText = it) },
@@ -183,7 +187,7 @@ fun BanglaNewsStudioProApp(
             onLoadSampleHtml = { viewModel.loadSampleHtmlIntoDraft() },
             onPickFileFromDevice = {
                 codeFilePickerLauncher.launch(
-                    arrayOf("application/json", "text/*", "*/*")
+                    arrayOf("text/html", "application/json", "text/*", "*/*")
                 )
             },
             onImportAndLaunch = { code ->
@@ -204,7 +208,12 @@ fun BanglaNewsStudioProApp(
             onSelectElement = { el, idx -> viewModel.selectCanvasElement(el, idx) },
             onUpdateCategory = { viewModel.updateCategoryTag(it) },
             onUpdateHeadline = { viewModel.updateHeadline(it) },
+            onUpdateHighlightWord = { viewModel.updateHighlightWord(it) },
             onUpdateSubheadline = { viewModel.updateSubheadline(it) },
+            onUpdateStageBannerText = { viewModel.updateStageBannerText(it) },
+            onUpdateToonWho = { viewModel.updateToonCharacterWho(it) },
+            onUpdateToonPose = { viewModel.updateToonCharacterPose(it) },
+            onSelectBackdropPreset = { viewModel.updateShotBackdropPreset(it) },
             onUpdateTicker = { viewModel.updateProjectMetadata(tickerText = it) },
             onUpdateChannelName = { viewModel.updateProjectMetadata(channelName = it) },
             onDeleteOrRestoreElement = { el, idx ->

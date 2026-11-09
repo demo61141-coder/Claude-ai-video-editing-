@@ -19,6 +19,7 @@ import android.text.TextPaint
 import androidx.core.content.res.ResourcesCompat
 import com.example.R
 import com.example.model.CanvasElementType
+import com.example.model.LowerThirdStyle
 import com.example.model.MotionGraphicOverlay
 import com.example.model.MotionPreset
 import com.example.model.NewsProject
@@ -26,11 +27,27 @@ import com.example.model.NewsShot
 import com.example.model.ShotMediaType
 import com.example.model.StudioBackdropPreset
 import com.example.model.TextAnimationStyle
+import com.example.model.ToonCharacterPose
+import com.example.model.ToonCharacterWho
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sin
 
 class BroadcastFrameRenderer(private val context: Context) {
+
+    // Bangla Toon Palette (Exact colors from user's Bangla Toon — News Reel code)
+    private val colToonWhite = Color.parseColor("#F6F1E7")
+    private val colTerracotta = Color.parseColor("#C8643B")
+    private val colMarigold = Color.parseColor("#F2A900")
+    private val colToonRed = Color.parseColor("#B3202A")
+    private val colTeal = Color.parseColor("#1F7A74")
+    private val colJute = Color.parseColor("#D9B88F")
+    private val colInk = Color.parseColor("#1B1A22")
+    private val colSkin = Color.parseColor("#C98B5E")
+    private val colSkinDark = Color.parseColor("#A66F47")
+    private val colGreen = Color.parseColor("#4E7A3A")
+    private val colWater = Color.parseColor("#2E8B9E")
+    private val colMinHair = Color.parseColor("#E8E4DA")
 
     private val presetBitmaps = mutableMapOf<StudioBackdropPreset, Bitmap>()
     private val customBitmaps = mutableMapOf<String, Bitmap>()
@@ -55,23 +72,63 @@ class BroadcastFrameRenderer(private val context: Context) {
     }
 
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val shapePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
     }
     private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 3.5f
+        strokeWidth = 5f
         color = Color.parseColor("#F59E0B")
-        pathEffect = DashPathEffect(floatArrayOf(14f, 8f), 0f)
+        pathEffect = DashPathEffect(floatArrayOf(20f, 12f), 0f)
     }
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
     private val matrix = Matrix()
     private val rectF = RectF()
-    private val badgePath = Path()
+    private val path = Path()
+
+    private data class ToonCharConfig(
+        val skin: Int,
+        val hair: Int,
+        val shirt: Int,
+        val accent: Int?,
+        val glasses: Boolean,
+        val mustache: Boolean,
+        val hairStyle: String,
+        val cap: Int?,
+        val phase: Float
+    )
+
+    private val hostConfig = ToonCharConfig(
+        skin = colSkin,
+        hair = colInk,
+        shirt = colTeal,
+        accent = colToonWhite,
+        glasses = true,
+        mustache = false,
+        hairStyle = "side",
+        cap = null,
+        phase = 0f
+    )
+
+    private val ministerConfig = ToonCharConfig(
+        skin = colSkinDark,
+        hair = colMinHair,
+        shirt = colToonWhite,
+        accent = colTerracotta,
+        glasses = false,
+        mustache = true,
+        hairStyle = "combed",
+        cap = colToonWhite,
+        phase = 1.4f
+    )
 
     fun preloadBitmaps(project: NewsProject) {
-        StudioBackdropPreset.entries.forEach { preset ->
+        StudioBackdropPreset.entries.filter { !it.isToonVectorScene }.forEach { preset ->
             getPresetBitmap(preset)
         }
         project.shots.forEach { shot ->
@@ -81,6 +138,7 @@ class BroadcastFrameRenderer(private val context: Context) {
     }
 
     private fun getPresetBitmap(preset: StudioBackdropPreset): Bitmap? {
+        if (preset.isToonVectorScene) return null
         presetBitmaps[preset]?.let { return it }
         return runCatching {
             val opts = BitmapFactory.Options().apply {
@@ -98,7 +156,6 @@ class BroadcastFrameRenderer(private val context: Context) {
             val uri = Uri.parse(uriString)
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val opts = BitmapFactory.Options().apply {
-                    inSampleSize = 1
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
                 BitmapFactory.decodeStream(stream, null, opts)?.also { decoded ->
@@ -156,9 +213,7 @@ class BroadcastFrameRenderer(private val context: Context) {
     }
 
     /**
-     * Hit-tests normalized canvas coordinates (0..1, 0..1) so when the user clicks directly
-     * on the video preview, we identify the exact element they clicked (Headline, Subheadline,
-     * Category Badge, Custom Text Layer, Ticker, Live Bug, or Backdrop Media).
+     * Hit-tests normalized coordinates (0..1, 0..1) on the 1920x1080 virtual canvas.
      */
     fun hitTestCanvasElement(
         normX: Float,
@@ -166,45 +221,53 @@ class BroadcastFrameRenderer(private val context: Context) {
         project: NewsProject,
         shot: NewsShot
     ): Pair<CanvasElementType, Int?> {
-        val vx = normX.coerceIn(0f, 1f) * 1280f
-        val vy = normY.coerceIn(0f, 1f) * 720f
+        val vx = normX.coerceIn(0f, 1f) * 1920f
+        val vy = normY.coerceIn(0f, 1f) * 1080f
 
-        // 1. Check Custom Floating Text Layers first
+        // 1. Custom Floating Text Layers
         shot.customTextLayers.forEachIndexed { idx, layer ->
-            val lx = layer.xPercent * 1280f
-            val ly = layer.yPercent * 720f
-            if (abs(vx - lx) <= 260f && abs(vy - ly) <= 46f) {
+            val lx = layer.xPercent * 1920f
+            val ly = layer.yPercent * 1080f
+            if (abs(vx - lx) <= 380f && abs(vy - ly) <= 68f) {
                 return CanvasElementType.CUSTOM_TEXT_LAYER to idx
             }
         }
 
-        // 2. Check Bottom Ticker
-        if (project.showTicker && vy >= 660f) {
+        // 2. Bottom Ticker
+        if (project.showTicker && vy >= 995f) {
             return CanvasElementType.NEWS_TICKER to null
         }
 
-        // 3. Check Lower-Third Banner Regions
-        if (shot.motionGraphicOverlay != MotionGraphicOverlay.CINEMATIC_CLEAN) {
-            if (shot.showSubheadline && vy in 588f..652f && vx in 40f..1240f) {
-                return CanvasElementType.SUBHEADLINE to null
-            }
-            if (shot.showHeadline && vy in 506f..588f && vx in 40f..1240f) {
-                return CanvasElementType.HEADLINE to null
-            }
-            if (shot.showCategoryBadge && vy in 460f..508f && vx in 40f..420f) {
-                return CanvasElementType.CATEGORY_BADGE to null
-            }
+        // 3. Caption Pill or Lower-Third Headline (y = 700..1000)
+        if (shot.showHeadline && vy in 740f..990f && vx in 140f..1780f) {
+            return CanvasElementType.HEADLINE to null
         }
 
-        // 4. Check Top Broadcast Channel / LIVE Bug
-        if (shot.showLiveBug && vy in 24f..90f && vx in 40f..520f) {
+        // 4. Stage Banner (when Toon Stage is active, y = 210..445)
+        if (shot.mediaType == ShotMediaType.PRESET_SCENE &&
+            shot.backdropPreset == StudioBackdropPreset.TOON_STAGE &&
+            shot.showStageBanner &&
+            vy in 210f..445f && vx in 200f..1720f
+        ) {
+            return CanvasElementType.STAGE_BANNER_TEXT to null
+        }
+
+        // 5. Animated Character Rig (Host or Minister in center/stage area)
+        if (shot.toonWho != ToonCharacterWho.NONE && vy in 280f..890f && vx in 420f..1520f) {
+            return CanvasElementType.TOON_CHARACTER to null
+        }
+
+        // 6. Top Broadcast Bug
+        if (shot.showLiveBug && vy in 30f..135f && vx in 50f..780f) {
             return CanvasElementType.LIVE_CHANNEL_BUG to null
         }
 
-        // 5. Otherwise user clicked the photo/video/keyframe backdrop
         return CanvasElementType.BACKDROP_MEDIA to null
     }
 
+    /**
+     * Renders a complete 1920x1080 virtual broadcast/cartoon frame onto [canvas].
+     */
     fun renderFrame(
         canvas: Canvas,
         width: Float,
@@ -217,8 +280,8 @@ class BroadcastFrameRenderer(private val context: Context) {
     ) {
         if (width <= 0f || height <= 0f) return
 
-        val virtualW = 1280f
-        val virtualH = 720f
+        val virtualW = 1920f
+        val virtualH = 1080f
         val scaleX = width / virtualW
         val scaleY = height / virtualH
 
@@ -229,39 +292,152 @@ class BroadcastFrameRenderer(private val context: Context) {
         val shotDuration = activeShot.durationSeconds.coerceAtLeast(1f)
         val shotProgress = (localSec / shotDuration).coerceIn(0f, 1f)
 
-        // 1. Background Photo / Video with Keyframe Interpolation
-        drawAnimatedBackdrop(canvas, virtualW, virtualH, activeShot, shotProgress)
+        // Apply Camera / Keyframe Motion Transform to Scene + Characters
+        val ease = smoothStep(shotProgress)
+        val intensity = activeShot.motionIntensity.coerceIn(0.4f, 2.0f)
+        val kf = activeShot.keyframes
+        val camScale: Float
+        val camTx: Float
+        val camTy: Float
 
-        // 2. Studio Atmosphere & Motion Graphic Overlays
-        drawStudioAtmosphereOverlay(canvas, virtualW, virtualH, activeShot, globalTimeSec)
+        if (activeShot.motionPreset == MotionPreset.STATIC_STUDIO) {
+            camScale = lerp(kf.startScale, kf.endScale, ease)
+            camTx = lerp(kf.startOffsetX, kf.endOffsetX, ease)
+            camTy = lerp(kf.startOffsetY, kf.endOffsetY, ease)
+        } else {
+            val s0 = kf.startScale
+            val s1 = kf.endScale
+            camScale = lerp(s0, 1f + (s1 - 1f) * intensity, ease).coerceIn(0.8f, 2.2f)
+            camTx = lerp(kf.startOffsetX, kf.endOffsetX, ease) * intensity
+            camTy = lerp(kf.startOffsetY, kf.endOffsetY, ease) * intensity
+        }
 
-        // 3. Top Broadcast Bug
-        drawTopBroadcastBar(
-            canvas = canvas,
-            virtualW = virtualW,
-            project = project,
-            activeShot = activeShot,
-            shotIndex = shotIndex,
-            totalShots = project.shots.size.coerceAtLeast(1),
-            globalTimeSec = globalTimeSec
-        )
+        canvas.save()
+        if (camScale != 1.0f || camTx != 0f || camTy != 0f) {
+            canvas.translate(virtualW / 2f + camTx, virtualH / 2f + camTy)
+            canvas.scale(camScale, camScale)
+            canvas.translate(-virtualW / 2f, -virtualH / 2f)
+        }
 
-        // 4. Lower-Third Broadcast Graphics
-        if (activeShot.motionGraphicOverlay != MotionGraphicOverlay.CINEMATIC_CLEAN) {
-            drawLowerThirdGraphics(
+        // 1. Draw Background Scene (Bangla Toon 2D Vector Scene OR Gallery Photo/Video/Studio)
+        drawSceneBackdrop(canvas, virtualW, virtualH, activeShot, globalTimeSec, shotProgress)
+
+        // 2. Draw Animated 2D Character Rig (Host / Minister)
+        if (activeShot.toonWho != ToonCharacterWho.NONE) {
+            val blink = (globalTimeSec % 4.2f) < 0.11f
+            val talk = if (localSec > 0.15f && localSec < (shotDuration - 0.18f)) {
+                (0.45f + 0.45f * abs(sin(globalTimeSec * 15f)))
+            } else {
+                0f
+            }
+            when (activeShot.toonWho) {
+                ToonCharacterWho.HOST -> {
+                    drawToonCharacter(
+                        canvas = canvas,
+                        cfg = hostConfig,
+                        x = virtualW * 0.50f,
+                        y = 900f,
+                        scale = 1.02f,
+                        t = globalTimeSec,
+                        blink = blink,
+                        talk = talk,
+                        pose = activeShot.toonPose
+                    )
+                }
+                ToonCharacterWho.MINISTER -> {
+                    drawToonCharacter(
+                        canvas = canvas,
+                        cfg = hostConfig,
+                        x = virtualW * 0.30f,
+                        y = 900f,
+                        scale = 0.98f,
+                        t = globalTimeSec,
+                        blink = blink,
+                        talk = 0f,
+                        pose = ToonCharacterPose.TALK
+                    )
+                    drawToonCharacter(
+                        canvas = canvas,
+                        cfg = ministerConfig,
+                        x = virtualW * 0.68f,
+                        y = 880f,
+                        scale = 1.05f,
+                        t = globalTimeSec,
+                        blink = blink,
+                        talk = talk,
+                        pose = activeShot.toonPose
+                    )
+                }
+                ToonCharacterWho.MINISTER_SOLO -> {
+                    drawToonCharacter(
+                        canvas = canvas,
+                        cfg = ministerConfig,
+                        x = virtualW * 0.50f,
+                        y = 890f,
+                        scale = 1.05f,
+                        t = globalTimeSec,
+                        blink = blink,
+                        talk = talk,
+                        pose = activeShot.toonPose
+                    )
+                }
+                ToonCharacterWho.NONE -> Unit
+            }
+        }
+
+        canvas.restore()
+
+        // 3. Optional Broadcast Atmosphere / Breaking Frame
+        if (activeShot.motionGraphicOverlay == MotionGraphicOverlay.BREAKING_PERIMETER_GLOW) {
+            val pulse = ((sin(globalTimeSec * 7.0) * 0.5 + 0.5) * 180 + 55).toInt().coerceIn(50, 240)
+            strokePaint.color = Color.argb(pulse, 225, 29, 72)
+            strokePaint.strokeWidth = 14f
+            rectF.set(14f, 14f, virtualW - 14f, virtualH - 14f)
+            canvas.drawRoundRect(rectF, 20f, 20f, strokePaint)
+        }
+
+        // 4. Optional Top Broadcast Bug
+        if (activeShot.showLiveBug || activeShot.motionGraphicOverlay == MotionGraphicOverlay.FULL_BROADCAST_PACK) {
+            drawTopBroadcastBar(
                 canvas = canvas,
                 virtualW = virtualW,
-                shot = activeShot,
-                localSec = localSec,
-                shotDuration = shotDuration,
-                shotProgress = shotProgress
+                project = project,
+                activeShot = activeShot,
+                shotIndex = shotIndex,
+                totalShots = project.shots.size.coerceAtLeast(1),
+                globalTimeSec = globalTimeSec
             )
         }
 
-        // 5. Custom Added Text Layers
+        // 5. Caption Pill (Bangla Toon Style with Marigold Highlight Word) OR TV Lower-Third Banner
+        if (activeShot.motionGraphicOverlay != MotionGraphicOverlay.CINEMATIC_CLEAN && activeShot.showHeadline) {
+            if (activeShot.lowerThirdStyle == LowerThirdStyle.TOON_CAPTION_PILL &&
+                activeShot.motionGraphicOverlay != MotionGraphicOverlay.FULL_BROADCAST_PACK
+            ) {
+                if (localSec >= 0.15f && localSec <= shotDuration - 0.10f) {
+                    drawToonCaptionPill(
+                        canvas = canvas,
+                        virtualW = virtualW,
+                        text = activeShot.headline,
+                        hiWord = activeShot.highlightWord
+                    )
+                }
+            } else {
+                drawTvLowerThirdGraphics(
+                    canvas = canvas,
+                    virtualW = virtualW,
+                    shot = activeShot,
+                    localSec = localSec,
+                    shotDuration = shotDuration,
+                    shotProgress = shotProgress
+                )
+            }
+        }
+
+        // 6. Custom Added Floating Text Layers
         drawCustomTextLayers(canvas, virtualW, virtualH, activeShot)
 
-        // 6. Bottom Scrolling News Ticker
+        // 7. Optional Bottom Scrolling News Ticker
         if (project.showTicker) {
             drawScrollingTicker(
                 canvas = canvas,
@@ -272,7 +448,7 @@ class BroadcastFrameRenderer(private val context: Context) {
             )
         }
 
-        // 7. Interactive Selection Highlight Box (only on Live Preview Canvas)
+        // 8. Interactive Selection Highlight Box on Live Preview Canvas
         if (drawSelectionHighlight && selectedCanvasElement != null) {
             drawElementSelectionBox(
                 canvas = canvas,
@@ -287,16 +463,28 @@ class BroadcastFrameRenderer(private val context: Context) {
         canvas.restore()
     }
 
-    private fun drawAnimatedBackdrop(
+    private fun drawSceneBackdrop(
         canvas: Canvas,
         virtualW: Float,
         virtualH: Float,
         shot: NewsShot,
+        globalTimeSec: Float,
         progress: Float
     ) {
-        shapePaint.shader = null
-        shapePaint.color = shot.backdropPreset.fallbackColorHex.toInt() or -0x1000000
-        canvas.drawRect(0f, 0f, virtualW, virtualH, shapePaint)
+        if (shot.mediaType == ShotMediaType.PRESET_SCENE && shot.backdropPreset.isToonVectorScene) {
+            when (shot.backdropPreset) {
+                StudioBackdropPreset.TOON_STAGE -> drawToonStageBg(canvas, virtualW, virtualH, shot)
+                StudioBackdropPreset.TOON_CANAL -> drawToonCanalBg(canvas, virtualW, virtualH, globalTimeSec)
+                StudioBackdropPreset.TOON_HOUSE -> drawToonHouseBg(canvas, virtualW, virtualH)
+                else -> drawToonCanalBg(canvas, virtualW, virtualH, globalTimeSec)
+            }
+            return
+        }
+
+        // Photo or Video Backdrop
+        fillPaint.shader = null
+        fillPaint.color = shot.backdropPreset.fallbackColorHex.toInt() or -0x1000000
+        canvas.drawRect(0f, 0f, virtualW, virtualH, fillPaint)
 
         val bitmap: Bitmap? = when (shot.mediaType) {
             ShotMediaType.GALLERY_VIDEO -> {
@@ -312,104 +500,445 @@ class BroadcastFrameRenderer(private val context: Context) {
                 shot.customImageUri?.let { getCustomBitmap(it) }
                     ?: getPresetBitmap(shot.backdropPreset)
             }
-            ShotMediaType.PRESET_PHOTO -> {
+            ShotMediaType.PRESET_SCENE -> {
                 shot.customImageUri?.let { getCustomBitmap(it) }
                     ?: getPresetBitmap(shot.backdropPreset)
             }
         }
 
-        val ease = smoothStep(progress)
-        val intensity = shot.motionIntensity.coerceIn(0.4f, 2.0f)
-        val kf = shot.keyframes
-
-        val currentScale: Float
-        val translateX: Float
-        val translateY: Float
-
-        if (shot.motionPreset == MotionPreset.CUSTOM_KEYFRAME) {
-            currentScale = lerp(kf.startScale, kf.endScale, ease)
-            translateX = lerp(kf.startOffsetX, kf.endOffsetX, ease)
-            translateY = lerp(kf.startOffsetY, kf.endOffsetY, ease)
-        } else {
-            val s0 = kf.startScale
-            val s1 = kf.endScale
-            currentScale = lerp(s0, 1f + (s1 - 1f) * intensity, ease).coerceIn(0.8f, 2.2f)
-            translateX = lerp(kf.startOffsetX, kf.endOffsetX, ease) * intensity
-            translateY = lerp(kf.startOffsetY, kf.endOffsetY, ease) * intensity
-        }
-
         if (bitmap != null && !bitmap.isRecycled) {
-            canvas.save()
             val bw = bitmap.width.toFloat().coerceAtLeast(1f)
             val bh = bitmap.height.toFloat().coerceAtLeast(1f)
-            val baseScale = maxOf(virtualW / bw, virtualH / bh)
-            val totalScale = baseScale * currentScale
-
+            val scale = maxOf(virtualW / bw, virtualH / bh)
             matrix.reset()
             matrix.postTranslate(-bw / 2f, -bh / 2f)
-            matrix.postScale(totalScale, totalScale)
-            matrix.postTranslate(virtualW / 2f + translateX, virtualH / 2f + translateY)
-
+            matrix.postScale(scale, scale)
+            matrix.postTranslate(virtualW / 2f, virtualH / 2f)
             canvas.drawBitmap(bitmap, matrix, bitmapPaint)
-            canvas.restore()
-        } else {
-            shapePaint.shader = LinearGradient(
-                0f, 0f, virtualW, virtualH,
-                intArrayOf(
-                    Color.parseColor("#0F172A"),
-                    Color.parseColor("#31102F"),
-                    Color.parseColor("#090D16")
-                ),
-                null,
-                Shader.TileMode.CLAMP
-            )
-            canvas.drawRect(0f, 0f, virtualW, virtualH, shapePaint)
-            shapePaint.shader = null
         }
     }
 
-    private fun drawStudioAtmosphereOverlay(
+    /**
+     * Exact 1:1 implementation of `bgStage(t)` from user's Bangla Toon code.
+     */
+    private fun drawToonStageBg(
         canvas: Canvas,
         virtualW: Float,
         virtualH: Float,
-        shot: NewsShot,
-        globalTimeSec: Float
+        shot: NewsShot
     ) {
-        if (shot.motionGraphicOverlay == MotionGraphicOverlay.FULL_BROADCAST_PACK ||
-            shot.motionGraphicOverlay == MotionGraphicOverlay.BREAKING_PERIMETER_GLOW
-        ) {
-            strokePaint.color = Color.argb(22, 148, 163, 184)
-            strokePaint.strokeWidth = 1f
-            val step = 80f
-            var x = (globalTimeSec * 12f) % step
-            while (x < virtualW) {
-                canvas.drawLine(x, 0f, x, virtualH, strokePaint)
-                x += step
-            }
+        fillPaint.shader = null
+        fillPaint.color = colToonWhite
+        canvas.drawRect(0f, 0f, virtualW, virtualH, fillPaint)
+
+        // Back teal pillars (alpha 0.35)
+        fillPaint.color = colTeal
+        fillPaint.alpha = 89
+        rectF.set(80f, 380f, 480f, 900f)
+        canvas.drawRoundRect(rectF, 20f, 20f, fillPaint)
+        rectF.set(1440f, 380f, 1840f, 900f)
+        canvas.drawRoundRect(rectF, 20f, 20f, fillPaint)
+        fillPaint.alpha = 255
+
+        // Stage Banner
+        if (shot.showStageBanner && shot.stageBannerText.isNotBlank()) {
+            fillPaint.color = colTerracotta
+            rectF.set(200f, 220f, 1720f, 440f)
+            canvas.drawRoundRect(rectF, 24f, 24f, fillPaint)
+
+            strokePaint.color = colInk
+            strokePaint.strokeWidth = 8f
+            canvas.drawRoundRect(rectF, 24f, 24f, strokePaint)
+
+            textPaint.typeface = banglaBoldTypeface
+            textPaint.color = colToonWhite
+            textPaint.textSize = if (shot.stageBannerText.length > 26) 68f else 84f
+            val textW = textPaint.measureText(shot.stageBannerText)
+            canvas.drawText(shot.stageBannerText, (virtualW - textW) / 2f, 358f, textPaint)
         }
 
-        // Vignette gradient
-        shapePaint.shader = LinearGradient(
-            0f, 0f, 0f, virtualH,
-            intArrayOf(
-                Color.argb(165, 6, 9, 17),
-                Color.argb(25, 6, 9, 17),
-                Color.argb(115, 6, 9, 17),
-                Color.argb(230, 6, 9, 17)
-            ),
-            floatArrayOf(0f, 0.28f, 0.62f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawRect(0f, 0f, virtualW, virtualH, shapePaint)
-        shapePaint.shader = null
+        // Front Jute Stage Floor
+        fillPaint.color = colJute
+        canvas.drawRect(0f, 860f, virtualW, virtualH, fillPaint)
+        strokePaint.color = colInk
+        strokePaint.strokeWidth = 10f
+        canvas.drawLine(0f, 860f, virtualW, 860f, strokePaint)
+    }
 
-        // Breaking Perimeter Alert Glow Frame
-        if (shot.motionGraphicOverlay == MotionGraphicOverlay.BREAKING_PERIMETER_GLOW) {
-            val pulse = ((sin(globalTimeSec * 7.0) * 0.5 + 0.5) * 180 + 55).toInt().coerceIn(50, 240)
-            strokePaint.color = Color.argb(pulse, 225, 29, 72)
-            strokePaint.strokeWidth = 10f
-            rectF.set(10f, 10f, virtualW - 10f, virtualH - 60f)
-            canvas.drawRoundRect(rectF, 14f, 14f, strokePaint)
+    /**
+     * Exact 1:1 implementation of `bgCanal(t)` from user's Bangla Toon code.
+     */
+    private fun drawToonCanalBg(
+        canvas: Canvas,
+        virtualW: Float,
+        virtualH: Float,
+        t: Float
+    ) {
+        fillPaint.shader = null
+        fillPaint.color = colToonWhite
+        canvas.drawRect(0f, 0f, virtualW, virtualH, fillPaint)
+
+        // Sun in sky
+        fillPaint.color = colMarigold
+        canvas.drawCircle(1550f, 200f, 90f, fillPaint)
+
+        // Back trees (alpha 0.4)
+        fillPaint.color = colGreen
+        fillPaint.alpha = 102
+        for (i in 0 until 5) {
+            canvas.drawCircle(120f + i * 180f, 420f, 70f, fillPaint)
+        }
+        fillPaint.alpha = 255
+
+        // Middle green bank
+        fillPaint.color = colGreen
+        canvas.drawRect(0f, 520f, virtualW, 720f, fillPaint)
+
+        // Canal water curve
+        path.reset()
+        path.moveTo(0f, 700f)
+        path.quadTo(960f, 640f, 1920f, 700f)
+        path.lineTo(1920f, 860f)
+        path.lineTo(0f, 860f)
+        path.close()
+        fillPaint.color = colWater
+        canvas.drawPath(path, fillPaint)
+
+        // Animated water waves
+        strokePaint.color = Color.argb(128, 255, 255, 255)
+        strokePaint.strokeWidth = 4f
+        for (i in 0 until 6) {
+            val y = 740f + i * 20f
+            val off = sin(t * 1.2f + i) * 20f
+            path.reset()
+            path.moveTo(100f + off, y)
+            path.quadTo(300f + off, y - 10f, 500f + off, y)
+            canvas.drawPath(path, strokePaint)
+        }
+
+        // Front dark ground
+        fillPaint.color = colInk
+        canvas.drawRect(0f, 860f, virtualW, virtualH, fillPaint)
+    }
+
+    /**
+     * Exact 1:1 implementation of `bgHouse(t)` from user's Bangla Toon code.
+     */
+    private fun drawToonHouseBg(
+        canvas: Canvas,
+        virtualW: Float,
+        virtualH: Float
+    ) {
+        fillPaint.shader = null
+        fillPaint.color = colToonWhite
+        canvas.drawRect(0f, 0f, virtualW, virtualH, fillPaint)
+
+        // Sun
+        fillPaint.color = colMarigold
+        canvas.drawCircle(300f, 180f, 80f, fillPaint)
+
+        // Paddy field
+        fillPaint.color = colGreen
+        canvas.drawRect(0f, 600f, virtualW, 920f, fillPaint)
+
+        strokePaint.color = Color.argb(38, 0, 0, 0)
+        strokePaint.strokeWidth = 4f
+        for (i in 0 until 20) {
+            val x = 60f + i * 95f
+            canvas.drawLine(x, 620f, x, 900f, strokePaint)
+        }
+
+        // House wall (terracotta)
+        fillPaint.color = colTerracotta
+        rectF.set(1280f, 480f, 1700f, 780f)
+        canvas.drawRoundRect(rectF, 20f, 20f, fillPaint)
+        strokePaint.color = colInk
+        strokePaint.strokeWidth = 8f
+        canvas.drawRoundRect(rectF, 20f, 20f, strokePaint)
+
+        // House roof (jute triangle)
+        path.reset()
+        path.moveTo(1260f, 480f)
+        path.lineTo(1490f, 340f)
+        path.lineTo(1720f, 480f)
+        path.close()
+        fillPaint.color = colJute
+        canvas.drawPath(path, fillPaint)
+        canvas.drawPath(path, strokePaint)
+
+        // Marigold windows
+        fillPaint.color = colMarigold
+        strokePaint.strokeWidth = 4f
+        rectF.set(1340f, 560f, 1430f, 650f)
+        canvas.drawRoundRect(rectF, 10f, 10f, fillPaint)
+        canvas.drawRoundRect(rectF, 10f, 10f, strokePaint)
+
+        rectF.set(1550f, 560f, 1640f, 650f)
+        canvas.drawRoundRect(rectF, 10f, 10f, fillPaint)
+        canvas.drawRoundRect(rectF, 10f, 10f, strokePaint)
+
+        // Front dark ground
+        fillPaint.color = colInk
+        canvas.drawRect(0f, 900f, virtualW, virtualH, fillPaint)
+    }
+
+    /**
+     * Exact 1:1 implementation of `drawChar(cfg, x, y, s, t, blink, talk, pose)` from user's Bangla Toon code!
+     */
+    private fun drawToonCharacter(
+        canvas: Canvas,
+        cfg: ToonCharConfig,
+        x: Float,
+        y: Float,
+        scale: Float,
+        t: Float,
+        blink: Boolean,
+        talk: Float,
+        pose: ToonCharacterPose
+    ) {
+        canvas.save()
+        canvas.translate(x, y)
+        canvas.scale(scale, scale)
+
+        val breath = 1f + 0.012f * sin(t * 2.1f + cfg.phase)
+
+        // Legs
+        for (legX in listOf(-50f, 50f)) {
+            canvas.save()
+            canvas.translate(legX, 0f)
+            fillPaint.color = colInk
+            strokePaint.color = colInk
+            strokePaint.strokeWidth = 8f
+            rectF.set(-26f, -15f, 26f, 100f)
+            canvas.drawRoundRect(rectF, 24f, 24f, fillPaint)
+            canvas.drawRoundRect(rectF, 24f, 24f, strokePaint)
+            canvas.restore()
+        }
+
+        // Torso
+        canvas.save()
+        canvas.translate(0f, -160f)
+        canvas.scale(1f, breath)
+        fillPaint.color = cfg.shirt
+        strokePaint.color = colInk
+        strokePaint.strokeWidth = 8f
+        rectF.set(-105f, -165f, 105f, 130f)
+        canvas.drawRoundRect(rectF, 44f, 44f, fillPaint)
+        canvas.drawRoundRect(rectF, 44f, 44f, strokePaint)
+
+        // Collar / Placket Accent
+        if (cfg.accent != null) {
+            fillPaint.color = cfg.accent
+            strokePaint.strokeWidth = 4f
+            rectF.set(-34f, -155f, 34f, -45f)
+            canvas.drawRoundRect(rectF, 16f, 16f, fillPaint)
+            canvas.drawRoundRect(rectF, 16f, 16f, strokePaint)
+        }
+
+        // 3 Buttons
+        fillPaint.color = colInk
+        for (i in 0 until 3) {
+            canvas.drawCircle(0f, -130f + i * 36f, 5f, fillPaint)
+        }
+        canvas.restore()
+
+        // Neck
+        fillPaint.color = cfg.skin
+        strokePaint.color = colInk
+        strokePaint.strokeWidth = 8f
+        rectF.set(-28f, -355f, 28f, -300f)
+        canvas.drawRoundRect(rectF, 16f, 16f, fillPaint)
+        canvas.drawRoundRect(rectF, 16f, 16f, strokePaint)
+
+        // Left Arm
+        canvas.save()
+        canvas.translate(-115f, -295f)
+        fillPaint.color = cfg.skin
+        strokePaint.strokeWidth = 8f
+        rectF.set(-26f, 0f, 26f, 195f)
+        canvas.drawRoundRect(rectF, 24f, 24f, fillPaint)
+        canvas.drawRoundRect(rectF, 24f, 24f, strokePaint)
+        canvas.drawCircle(0f, 200f, 32f, fillPaint)
+        canvas.drawCircle(0f, 200f, 32f, strokePaint)
+        canvas.restore()
+
+        // Right Arm (with Point / Talk pose rotation)
+        val raiseRad = if (pose == ToonCharacterPose.POINT) -0.9f else 0f
+        val armAngleDeg = Math.toDegrees((raiseRad + sin(t * 1.5f) * 0.1f * talk).toDouble()).toFloat()
+        canvas.save()
+        canvas.translate(115f, -295f)
+        canvas.rotate(armAngleDeg)
+        fillPaint.color = cfg.skin
+        strokePaint.strokeWidth = 8f
+        rectF.set(-26f, 0f, 26f, 195f)
+        canvas.drawRoundRect(rectF, 24f, 24f, fillPaint)
+        canvas.drawRoundRect(rectF, 24f, 24f, strokePaint)
+        canvas.drawCircle(0f, 200f, 32f, fillPaint)
+        canvas.drawCircle(0f, 200f, 32f, strokePaint)
+        canvas.restore()
+
+        // Head & Ears
+        val hy = -460f
+        fillPaint.color = cfg.skin
+        strokePaint.strokeWidth = 8f
+        rectF.set(-102f, hy - 116f, 102f, hy + 116f)
+        canvas.drawOval(rectF, fillPaint)
+        canvas.drawOval(rectF, strokePaint)
+
+        canvas.drawCircle(-105f, hy + 10f, 22f, fillPaint)
+        canvas.drawCircle(-105f, hy + 10f, 22f, strokePaint)
+        canvas.drawCircle(105f, hy + 10f, 22f, fillPaint)
+        canvas.drawCircle(105f, hy + 10f, 22f, strokePaint)
+
+        // Hair
+        fillPaint.color = cfg.hair
+        strokePaint.strokeWidth = 6f
+        path.reset()
+        if (cfg.hairStyle == "side") {
+            path.moveTo(-98f, hy - 28f)
+            path.quadTo(-108f, hy - 128f, 0f, hy - 132f)
+            path.quadTo(108f, hy - 128f, 98f, hy - 28f)
+            path.quadTo(55f, hy - 78f, 0f, hy - 82f)
+            path.quadTo(-55f, hy - 78f, -98f, hy - 28f)
+            path.close()
+        } else {
+            path.moveTo(-100f, hy - 20f)
+            path.quadTo(-115f, hy - 135f, 10f, hy - 138f)
+            path.quadTo(120f, hy - 130f, 102f, hy - 20f)
+            path.quadTo(60f, hy - 100f, -10f, hy - 90f)
+            path.quadTo(-70f, hy - 85f, -100f, hy - 20f)
+            path.close()
+        }
+        canvas.drawPath(path, fillPaint)
+        canvas.drawPath(path, strokePaint)
+
+        // Cap (Minister)
+        if (cfg.cap != null) {
+            fillPaint.color = cfg.cap
+            strokePaint.strokeWidth = 6f
+            rectF.set(-105f, hy - 150f, 105f, hy - 66f)
+            canvas.drawArc(rectF, 180f, 180f, true, fillPaint)
+            canvas.drawArc(rectF, 180f, 180f, true, strokePaint)
+
+            rectF.set(-95f, hy - 112f, 95f, hy - 86f)
+            canvas.drawRoundRect(rectF, 12f, 12f, fillPaint)
+            canvas.drawRoundRect(rectF, 12f, 12f, strokePaint)
+        }
+
+        // Eyebrows
+        strokePaint.color = colInk
+        strokePaint.strokeWidth = 7f
+        path.reset()
+        path.moveTo(-66f, hy - 38f)
+        path.quadTo(-44f, hy - 52f, -22f, hy - 40f)
+        canvas.drawPath(path, strokePaint)
+
+        path.reset()
+        path.moveTo(22f, hy - 40f)
+        path.quadTo(44f, hy - 52f, 66f, hy - 38f)
+        canvas.drawPath(path, strokePaint)
+
+        // Eyes (blinking)
+        val eyeH = if (blink) 2f else 14f
+        fillPaint.color = colInk
+        rectF.set(-59f, hy - 4f - eyeH, -29f, hy - 4f + eyeH)
+        canvas.drawOval(rectF, fillPaint)
+        rectF.set(29f, hy - 4f - eyeH, 59f, hy - 4f + eyeH)
+        canvas.drawOval(rectF, fillPaint)
+
+        // Nose
+        strokePaint.strokeWidth = 6f
+        path.reset()
+        path.moveTo(0f, hy + 6f)
+        path.quadTo(-7f, hy + 24f, 0f, hy + 28f)
+        canvas.drawPath(path, strokePaint)
+
+        // Mustache (Minister)
+        if (cfg.mustache) {
+            fillPaint.color = cfg.hair
+            strokePaint.strokeWidth = 5f
+            rectF.set(-44f, hy + 30f, 44f, hy + 54f)
+            canvas.drawArc(rectF, 180f, 180f, true, fillPaint)
+            canvas.drawArc(rectF, 180f, 180f, true, strokePaint)
+        }
+
+        // Animated Talking Mouth
+        val mo = if (talk > 0.15f) 12f + talk * 12f else 3f
+        fillPaint.color = colToonRed
+        strokePaint.strokeWidth = 7f
+        rectF.set(-34f, hy + 62f - mo, 34f, hy + 62f + mo)
+        canvas.drawOval(rectF, fillPaint)
+        canvas.drawOval(rectF, strokePaint)
+
+        // Cheeks
+        fillPaint.color = Color.argb(56, 179, 32, 42)
+        canvas.drawCircle(-62f, hy + 44f, 14f, fillPaint)
+        canvas.drawCircle(62f, hy + 44f, 14f, fillPaint)
+
+        // Glasses (Host)
+        if (cfg.glasses) {
+            strokePaint.color = colInk
+            strokePaint.strokeWidth = 5f
+            rectF.set(-68f, hy - 24f, -20f, hy + 16f)
+            canvas.drawOval(rectF, strokePaint)
+            rectF.set(20f, hy - 24f, 68f, hy + 16f)
+            canvas.drawOval(rectF, strokePaint)
+            canvas.drawLine(-20f, hy - 4f, 20f, hy - 4f, strokePaint)
+        }
+
+        canvas.restore()
+    }
+
+    /**
+     * Exact 1:1 implementation of `drawCaption(text, hiWord)` from user's Bangla Toon code!
+     * Draws the rounded dark pill at y = 880 with white text and marigold highlighted word.
+     */
+    private fun drawToonCaptionPill(
+        canvas: Canvas,
+        virtualW: Float,
+        text: String,
+        hiWord: String
+    ) {
+        if (text.isBlank()) return
+        textPaint.typeface = banglaBoldTypeface
+        textPaint.textSize = when {
+            text.length > 52 -> 42f
+            text.length > 38 -> 48f
+            else -> 54f
+        }
+
+        val padX = 54f
+        val h = 94f
+        val fullTextW = textPaint.measureText(text)
+        val pillW = (fullTextW + padX * 2f).coerceIn(420f, 1740f)
+        val x = (virtualW - pillW) / 2f
+        val y = 880f
+
+        fillPaint.color = Color.argb(232, 27, 26, 34)
+        rectF.set(x, y, x + pillW, y + h)
+        canvas.drawRoundRect(rectF, h / 2f, h / 2f, fillPaint)
+
+        val baselineY = y + h / 2f + 18f
+        val cleanHi = hiWord.trim()
+
+        if (cleanHi.isEmpty() || !text.contains(cleanHi)) {
+            textPaint.color = Color.WHITE
+            val fitted = ellipsizeText(text, textPaint, pillW - 60f)
+            val fw = textPaint.measureText(fitted)
+            canvas.drawText(fitted, (virtualW - fw) / 2f, baselineY, textPaint)
+        } else {
+            val parts = text.split(cleanHi)
+            var cursorX = (virtualW - fullTextW) / 2f
+            for (i in parts.indices) {
+                textPaint.color = Color.WHITE
+                canvas.drawText(parts[i], cursorX, baselineY, textPaint)
+                cursorX += textPaint.measureText(parts[i])
+                if (i < parts.lastIndex) {
+                    textPaint.color = colMarigold
+                    canvas.drawText(cleanHi, cursorX, baselineY, textPaint)
+                    cursorX += textPaint.measureText(cleanHi)
+                }
+            }
         }
     }
 
@@ -422,73 +951,55 @@ class BroadcastFrameRenderer(private val context: Context) {
         totalShots: Int,
         globalTimeSec: Float
     ) {
-        val topY = 34f
-        val barH = 44f
-        var cursorX = 48f
+        val topY = 44f
+        val barH = 60f
+        var cursorX = 64f
 
         if (activeShot.showLiveBug) {
-            shapePaint.color = Color.parseColor("#E11D48")
-            rectF.set(cursorX, topY, cursorX + 116f, topY + barH)
-            canvas.drawRoundRect(rectF, 8f, 8f, shapePaint)
+            fillPaint.color = Color.parseColor("#E11D48")
+            rectF.set(cursorX, topY, cursorX + 160f, topY + barH)
+            canvas.drawRoundRect(rectF, 12f, 12f, fillPaint)
 
             val pulseAlpha = ((sin(globalTimeSec * 6.0) * 0.4 + 0.6) * 255).toInt().coerceIn(90, 255)
-            shapePaint.color = Color.argb(pulseAlpha, 255, 255, 255)
-            canvas.drawCircle(cursorX + 24f, topY + barH / 2f, 6.5f, shapePaint)
+            fillPaint.color = Color.argb(pulseAlpha, 255, 255, 255)
+            canvas.drawCircle(cursorX + 34f, topY + barH / 2f, 9f, fillPaint)
 
             textPaint.typeface = studioMonoTypeface
-            textPaint.textSize = 20f
+            textPaint.textSize = 28f
             textPaint.color = Color.WHITE
-            canvas.drawText("LIVE", cursorX + 42f, topY + 29f, textPaint)
-            cursorX += 126f
+            canvas.drawText("LIVE", cursorX + 58f, topY + 40f, textPaint)
+            cursorX += 174f
 
             val channelText = project.channelName.ifBlank { "বাংলা নিউজ ২৪" }
             textPaint.typeface = banglaBoldTypeface
-            textPaint.textSize = 22f
+            textPaint.textSize = 30f
             val channelTextW = textPaint.measureText(channelText)
-            val pillW = channelTextW + 44f
+            val pillW = channelTextW + 56f
 
-            shapePaint.color = Color.argb(225, 15, 23, 42)
+            fillPaint.color = Color.argb(225, 15, 23, 42)
             rectF.set(cursorX, topY, cursorX + pillW, topY + barH)
-            canvas.drawRoundRect(rectF, 8f, 8f, shapePaint)
-
-            strokePaint.color = Color.argb(120, 245, 158, 11)
-            strokePaint.strokeWidth = 1.5f
-            canvas.drawRoundRect(rectF, 8f, 8f, strokePaint)
+            canvas.drawRoundRect(rectF, 12f, 12f, fillPaint)
 
             textPaint.color = Color.parseColor("#F8FAFC")
-            canvas.drawText(channelText, cursorX + 22f, topY + 30f, textPaint)
+            canvas.drawText(channelText, cursorX + 28f, topY + 41f, textPaint)
         }
 
-        val rightEdge = virtualW - 48f
-        val locationText = "${activeShot.reporterLocation}  •  SHOT ${shotIndex + 1}/$totalShots"
-        textPaint.typeface = banglaRegularTypeface
-        textPaint.textSize = 18f
+        val rightEdge = virtualW - 64f
+        val locationText = "SHOT ${shotIndex + 1}/$totalShots"
+        textPaint.typeface = studioMonoTypeface
+        textPaint.textSize = 24f
         val locW = textPaint.measureText(locationText)
-        val waveformW = if (activeShot.showWaveformOverlay) 78f else 0f
-        val rightBoxW = locW + waveformW + 44f
+        val rightBoxW = locW + 48f
 
-        shapePaint.color = Color.argb(215, 15, 23, 42)
+        fillPaint.color = Color.argb(200, 15, 23, 42)
         rectF.set(rightEdge - rightBoxW, topY, rightEdge, topY + barH)
-        canvas.drawRoundRect(rectF, 8f, 8f, shapePaint)
+        canvas.drawRoundRect(rectF, 12f, 12f, fillPaint)
 
-        textPaint.color = Color.parseColor("#E2E8F0")
-        canvas.drawText(locationText, rightEdge - rightBoxW + 20f, topY + 28f, textPaint)
-
-        if (activeShot.showWaveformOverlay) {
-            val waveStartX = rightEdge - waveformW - 10f
-            val centerY = topY + barH / 2f
-            shapePaint.color = Color.parseColor("#10B981")
-            for (b in 0 until 8) {
-                val amp = (sin(globalTimeSec * 10f + b * 0.9f) * 0.5 + 0.5).toFloat()
-                val barHeight = 6f + amp * 20f
-                val bx = waveStartX + b * 8.5f
-                rectF.set(bx, centerY - barHeight / 2f, bx + 4.5f, centerY + barHeight / 2f)
-                canvas.drawRoundRect(rectF, 2f, 2f, shapePaint)
-            }
-        }
+        textPaint.color = Color.parseColor("#F2A900")
+        canvas.drawText(locationText, rightEdge - rightBoxW + 24f, topY + 39f, textPaint)
     }
 
-    private fun drawLowerThirdGraphics(
+    private fun drawTvLowerThirdGraphics(
         canvas: Canvas,
         virtualW: Float,
         shot: NewsShot,
@@ -508,59 +1019,52 @@ class BroadcastFrameRenderer(private val context: Context) {
             1f
         }
         val visibilityFactor = min(enterFactor, exitFactor)
+        val slideOffsetY = (1f - visibilityFactor) * 75f
 
-        val slideOffsetY = when (shot.textAnimation) {
-            TextAnimationStyle.SLIDE_UP_REVEAL -> (1f - visibilityFactor) * 60f
-            TextAnimationStyle.POP_AND_GLOW -> (1f - visibilityFactor) * 32f
-            else -> (1f - visibilityFactor) * 16f
-        }
-
-        val leftX = 48f
-        val bannerW = virtualW - 96f
-        val baseTopY = 468f + slideOffsetY
+        val leftX = 72f
+        val bannerW = virtualW - 144f
+        val baseTopY = 710f + slideOffsetY
 
         canvas.save()
 
-        // 1. Category Badge
         if (shot.showCategoryBadge && shot.categoryTag.isNotBlank()) {
             val catText = shot.categoryTag
             textPaint.typeface = banglaBoldTypeface
-            textPaint.textSize = 22f
-            val catW = (textPaint.measureText(catText) + 52f).coerceAtLeast(180f)
-            val catH = 40f
+            textPaint.textSize = 32f
+            val catW = (textPaint.measureText(catText) + 72f).coerceAtLeast(240f)
+            val catH = 56f
 
-            badgePath.reset()
-            badgePath.moveTo(leftX, baseTopY)
-            badgePath.lineTo(leftX + catW, baseTopY)
-            badgePath.lineTo(leftX + catW - 16f, baseTopY + catH)
-            badgePath.lineTo(leftX, baseTopY + catH)
-            badgePath.close()
+            path.reset()
+            path.moveTo(leftX, baseTopY)
+            path.lineTo(leftX + catW, baseTopY)
+            path.lineTo(leftX + catW - 22f, baseTopY + catH)
+            path.lineTo(leftX, baseTopY + catH)
+            path.close()
 
-            shapePaint.color = badgeColor
-            canvas.drawPath(badgePath, shapePaint)
+            fillPaint.color = badgeColor
+            canvas.drawPath(path, fillPaint)
 
             textPaint.color = Color.parseColor("#090D16")
-            canvas.drawText(catText, leftX + 20f, baseTopY + 28f, textPaint)
+            canvas.drawText(catText, leftX + 28f, baseTopY + 39f, textPaint)
         }
 
-        val headlineTopY = baseTopY + 40f
-        val headlineH = 84f
+        val headlineTopY = baseTopY + 56f
+        val headlineH = 116f
 
-        // 2. Main Headline Banner
         if (shot.showHeadline && shot.headline.isNotBlank()) {
-            shapePaint.shader = LinearGradient(
+            fillPaint.shader = LinearGradient(
                 leftX, headlineTopY, leftX + bannerW, headlineTopY,
                 intArrayOf(primaryColor, darkenColor(primaryColor, 0.72f)),
                 null,
                 Shader.TileMode.CLAMP
             )
             rectF.set(leftX, headlineTopY, leftX + bannerW, headlineTopY + headlineH)
-            canvas.drawRoundRect(rectF, 6f, 6f, shapePaint)
-            shapePaint.shader = null
+            canvas.drawRoundRect(rectF, 10f, 10f, fillPaint)
+            fillPaint.shader = null
 
-            shapePaint.color = badgeColor
-            rectF.set(leftX, headlineTopY, leftX + 10f, headlineTopY + headlineH)
-            canvas.drawRect(rectF, shapePaint)
+            fillPaint.color = badgeColor
+            rectF.set(leftX, headlineTopY, leftX + 14f, headlineTopY + headlineH)
+            canvas.drawRect(rectF, fillPaint)
 
             val rawHeadline = shot.headline
             val displayedHeadline = if (shot.textAnimation == TextAnimationStyle.TYPEWRITER_BANGLA) {
@@ -574,43 +1078,39 @@ class BroadcastFrameRenderer(private val context: Context) {
             textPaint.typeface = banglaBoldTypeface
             textPaint.color = Color.WHITE
             textPaint.textSize = when {
-                rawHeadline.length > 62 -> 28f
-                rawHeadline.length > 45 -> 32f
-                else -> 36f
+                rawHeadline.length > 60 -> 40f
+                rawHeadline.length > 44 -> 46f
+                else -> 52f
             }
-            val maxTextWidth = bannerW - 56f
-            val fittedHeadline = ellipsizeText(displayedHeadline, textPaint, maxTextWidth)
-            canvas.drawText(fittedHeadline, leftX + 28f, headlineTopY + 54f, textPaint)
+            val fittedHeadline = ellipsizeText(displayedHeadline, textPaint, bannerW - 80f)
+            canvas.drawText(fittedHeadline, leftX + 40f, headlineTopY + 76f, textPaint)
         }
 
-        // 3. Subheadline Bar
         val subTopY = headlineTopY + headlineH
-        val subH = 52f
-        if (shot.showSubheadline && shot.subheadline.isNotBlank() &&
-            shot.motionGraphicOverlay != MotionGraphicOverlay.MINIMAL_LOWER_THIRD
-        ) {
-            shapePaint.color = Color.argb(
+        val subH = 72f
+        if (shot.showSubheadline && shot.subheadline.isNotBlank()) {
+            fillPaint.color = Color.argb(
                 240,
                 Color.red(secondaryColor),
                 Color.green(secondaryColor),
                 Color.blue(secondaryColor)
             )
             rectF.set(leftX, subTopY, leftX + bannerW, subTopY + subH)
-            canvas.drawRoundRect(rectF, 6f, 6f, shapePaint)
+            canvas.drawRoundRect(rectF, 10f, 10f, fillPaint)
 
             textPaint.typeface = banglaRegularTypeface
-            textPaint.textSize = 23f
+            textPaint.textSize = 34f
             textPaint.color = Color.parseColor("#E2E8F0")
-            val fittedSub = ellipsizeText(shot.subheadline, textPaint, bannerW - 56f)
-            canvas.drawText(fittedSub, leftX + 28f, subTopY + 34f, textPaint)
+            val fittedSub = ellipsizeText(shot.subheadline, textPaint, bannerW - 80f)
+            canvas.drawText(fittedSub, leftX + 40f, subTopY + 47f, textPaint)
 
-            shapePaint.color = badgeColor
+            fillPaint.color = badgeColor
             canvas.drawRect(
                 leftX,
-                subTopY + subH - 4f,
+                subTopY + subH - 6f,
                 leftX + bannerW * shotProgress,
                 subTopY + subH,
-                shapePaint
+                fillPaint
             )
         }
 
@@ -625,24 +1125,25 @@ class BroadcastFrameRenderer(private val context: Context) {
     ) {
         shot.customTextLayers.forEach { layer ->
             if (layer.text.isBlank()) return@forEach
+            val scaledFont = (layer.fontSizePx * 1.45f).coerceIn(28f, 92f)
             textPaint.typeface = banglaBoldTypeface
-            textPaint.textSize = layer.fontSizePx.coerceIn(18f, 64f)
+            textPaint.textSize = scaledFont
             val textW = textPaint.measureText(layer.text)
             val cx = (layer.xPercent.coerceIn(0.1f, 0.9f) * virtualW)
             val cy = (layer.yPercent.coerceIn(0.1f, 0.85f) * virtualH)
-            val boxW = textW + 44f
-            val boxH = layer.fontSizePx + 26f
+            val boxW = textW + 64f
+            val boxH = scaledFont + 36f
 
-            shapePaint.color = layer.bgColorHex.toInt()
+            fillPaint.color = layer.bgColorHex.toInt()
             rectF.set(cx - boxW / 2f, cy - boxH / 2f, cx + boxW / 2f, cy + boxH / 2f)
-            canvas.drawRoundRect(rectF, 10f, 10f, shapePaint)
+            canvas.drawRoundRect(rectF, 16f, 16f, fillPaint)
 
             strokePaint.color = Color.WHITE
-            strokePaint.strokeWidth = 1.5f
-            canvas.drawRoundRect(rectF, 10f, 10f, strokePaint)
+            strokePaint.strokeWidth = 2.5f
+            canvas.drawRoundRect(rectF, 16f, 16f, strokePaint)
 
             textPaint.color = layer.textColorHex.toInt() or -0x1000000
-            canvas.drawText(layer.text, cx - textW / 2f, cy + layer.fontSizePx * 0.34f, textPaint)
+            canvas.drawText(layer.text, cx - textW / 2f, cy + scaledFont * 0.34f, textPaint)
         }
     }
 
@@ -653,39 +1154,39 @@ class BroadcastFrameRenderer(private val context: Context) {
         project: NewsProject,
         globalTimeSec: Float
     ) {
-        val tickerH = 54f
+        val tickerH = 76f
         val topY = virtualH - tickerH
 
-        shapePaint.color = Color.parseColor("#060911")
-        canvas.drawRect(0f, topY, virtualW, virtualH, shapePaint)
+        fillPaint.color = Color.parseColor("#060911")
+        canvas.drawRect(0f, topY, virtualW, virtualH, fillPaint)
 
-        shapePaint.color = Color.parseColor("#E11D48")
-        canvas.drawRect(0f, topY, virtualW, topY + 3f, shapePaint)
+        fillPaint.color = Color.parseColor("#E11D48")
+        canvas.drawRect(0f, topY, virtualW, topY + 4f, fillPaint)
 
         val tickerStr = project.tickerText.ifBlank {
             "ব্রেকিং নিউজ: সরাসরি স্টুডিও থেকে সম্প্রচারিত সংবাদ বুলেটিন"
         }
         val repeatedTicker = "$tickerStr   •   $tickerStr   •   "
         textPaint.typeface = banglaBoldTypeface
-        textPaint.textSize = 23f
+        textPaint.textSize = 34f
         textPaint.color = Color.parseColor("#F8FAFC")
 
-        val singleCycleWidth = textPaint.measureText("$tickerStr   •   ").coerceAtLeast(400f)
-        val speed = 135f * project.tickerSpeedMultiplier.coerceIn(0.5f, 2.5f)
+        val singleCycleWidth = textPaint.measureText("$tickerStr   •   ").coerceAtLeast(600f)
+        val speed = 190f * project.tickerSpeedMultiplier.coerceIn(0.5f, 2.5f)
         val scrollOffset = (globalTimeSec * speed) % singleCycleWidth
 
         canvas.save()
-        canvas.clipRect(190f, topY, virtualW, virtualH)
-        canvas.drawText(repeatedTicker, 200f - scrollOffset, topY + 36f, textPaint)
+        canvas.clipRect(260f, topY, virtualW, virtualH)
+        canvas.drawText(repeatedTicker, 280f - scrollOffset, topY + 50f, textPaint)
         canvas.restore()
 
-        shapePaint.color = Color.parseColor("#E11D48")
-        canvas.drawRect(0f, topY, 186f, virtualH, shapePaint)
+        fillPaint.color = Color.parseColor("#E11D48")
+        canvas.drawRect(0f, topY, 260f, virtualH, fillPaint)
 
         textPaint.typeface = banglaBoldTypeface
-        textPaint.textSize = 23f
+        textPaint.textSize = 34f
         textPaint.color = Color.WHITE
-        canvas.drawText("শিরোনাম", 42f, topY + 36f, textPaint)
+        canvas.drawText("শিরোনাম", 62f, topY + 50f, textPaint)
     }
 
     private fun drawElementSelectionBox(
@@ -697,25 +1198,28 @@ class BroadcastFrameRenderer(private val context: Context) {
         customTextIdx: Int?
     ) {
         when (element) {
-            CanvasElementType.HEADLINE -> rectF.set(44f, 504f, virtualW - 44f, 594f)
-            CanvasElementType.SUBHEADLINE -> rectF.set(44f, 590f, virtualW - 44f, 648f)
-            CanvasElementType.CATEGORY_BADGE -> rectF.set(44f, 462f, 340f, 510f)
-            CanvasElementType.LIVE_CHANNEL_BUG -> rectF.set(44f, 28f, 490f, 84f)
-            CanvasElementType.NEWS_TICKER -> rectF.set(4f, virtualH - 58f, virtualW - 4f, virtualH - 4f)
+            CanvasElementType.HEADLINE,
+            CanvasElementType.HIGHLIGHT_WORD -> rectF.set(160f, 868f, virtualW - 160f, 984f)
+            CanvasElementType.STAGE_BANNER_TEXT -> rectF.set(190f, 210f, 1730f, 450f)
+            CanvasElementType.TOON_CHARACTER -> rectF.set(420f, 280f, 1500f, 960f)
+            CanvasElementType.SUBHEADLINE -> rectF.set(66f, 875f, virtualW - 66f, 960f)
+            CanvasElementType.CATEGORY_BADGE -> rectF.set(66f, 700f, 500f, 770f)
+            CanvasElementType.LIVE_CHANNEL_BUG -> rectF.set(56f, 38f, 720f, 114f)
+            CanvasElementType.NEWS_TICKER -> rectF.set(8f, virtualH - 82f, virtualW - 8f, virtualH - 6f)
             CanvasElementType.CUSTOM_TEXT_LAYER -> {
                 val layer = customTextIdx?.let { shot.customTextLayers.getOrNull(it) }
                     ?: shot.customTextLayers.firstOrNull()
                 if (layer != null) {
                     val cx = layer.xPercent * virtualW
                     val cy = layer.yPercent * virtualH
-                    rectF.set(cx - 210f, cy - 38f, cx + 210f, cy + 38f)
+                    rectF.set(cx - 320f, cy - 56f, cx + 320f, cy + 56f)
                 } else {
                     return
                 }
             }
-            CanvasElementType.BACKDROP_MEDIA -> rectF.set(16f, 16f, virtualW - 16f, 452f)
+            CanvasElementType.BACKDROP_MEDIA -> rectF.set(24f, 24f, virtualW - 24f, 850f)
         }
-        canvas.drawRoundRect(rectF, 8f, 8f, selectionPaint)
+        canvas.drawRoundRect(rectF, 16f, 16f, selectionPaint)
     }
 
     private fun ellipsizeText(text: String, paint: TextPaint, maxWidth: Float): String {
